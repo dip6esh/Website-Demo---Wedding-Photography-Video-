@@ -1,11 +1,11 @@
-import { createFileRoute, Link, useRouter } from "@tanstack/react-router";
+import { createFileRoute, Link, notFound, useRouter } from "@tanstack/react-router";
 import { ArrowLeft, ChevronLeft, ChevronRight, X } from "lucide-react";
 import { useEffect, useState } from "react";
-import { getPublicAlbum, listPublicAlbums } from "./-_albums.list";
+import { getPublicAlbum, listPublicAlbums, type PublicAlbum } from "./-_albums.list";
 
 export const Route = createFileRoute("/albums/$albumId")({
   head: (ctx) => {
-    const album = (ctx.loaderData as { album: { title?: string; description?: string; cover_image?: string } } | undefined)?.album;
+    const album = (ctx.loaderData as { album?: { title?: string; description?: string; cover_image?: string } } | undefined)?.album;
     const title = album?.title ? `${album.title} — Vessel Studio` : "Album — Vessel Studio";
     const desc = album?.description?.slice(0, 160) || "A project gallery from Vessel Studio.";
     const ogImage = album?.cover_image;
@@ -19,13 +19,54 @@ export const Route = createFileRoute("/albums/$albumId")({
     return { title, meta };
   },
   loader: async ({ params }) => {
-    const res = await getPublicAlbum(params.albumId as unknown as Parameters<typeof getPublicAlbum>[0]);
     const listRes = await listPublicAlbums();
-    const siblings = "albums" in listRes ? listRes.albums : [];
-    return {
-      album: res.album,
-      siblings,
+    const siblings: PublicAlbum[] = "albums" in listRes ? listRes.albums : [];
+    const siblingMatch = siblings.find((a) => a.id === params.albumId);
+
+    const typedGetPublicAlbum = getPublicAlbum as (id: string) => ReturnType<typeof getPublicAlbum>;
+    const res = await typedGetPublicAlbum(params.albumId);
+    console.warn("[albums.$albumId loader] getPublicAlbum result:", {
+      found: res.found,
       source: res.source,
+      id: params.albumId,
+      siblingMatchTitle: siblingMatch?.title,
+      debug: (res as unknown as { debug?: unknown }).debug,
+    });
+
+    let album: PublicAlbum;
+    let source: "fallback" | "database";
+    if (res.found && res.album) {
+      album = res.album;
+      source = res.source;
+    } else if (siblingMatch) {
+      album = {
+        id: siblingMatch.id,
+        category: siblingMatch.category,
+        title: siblingMatch.title,
+        location: siblingMatch.location,
+        cover_image: siblingMatch.cover_image,
+        description: siblingMatch.description,
+        photo_count: siblingMatch.photo_count,
+        photos: siblingMatch.photos ?? [
+          {
+            id: `${siblingMatch.id}-cover`,
+            image: siblingMatch.cover_image,
+            alt: siblingMatch.title,
+            caption: "",
+          },
+        ],
+      };
+      source = res.source;
+      console.warn("[albums.$albumId loader] Using sibling fallback for", params.albumId, "=", siblingMatch.title);
+    } else {
+      console.warn("[albums.$albumId loader] Album truly missing, throwing 404 for:", params.albumId);
+      throw notFound();
+    }
+
+    return {
+      album,
+      siblings,
+      source,
     } as const;
   },
   component: AlbumDetailPage,

@@ -130,29 +130,61 @@ export const listPublicAlbums = createServerFn({ method: "GET" }).handler(async 
   }
 });
 
-export const getPublicAlbum = createServerFn({ method: "GET" })
-  .validator((body: unknown) => {
-    if (typeof body === "string" && body.length > 0) return { success: true as const, data: body };
-    return { success: false as const, error: { issues: [{ message: "Missing album id" }] } };
-  })
-  .handler(async (args) => {
-    const raw = args?.data as unknown;
-    let id = "";
-    if (typeof raw === "string") {
-      id = raw;
-    } else if (raw && typeof raw === "object" && "success" in raw) {
-      const safe = raw as { success: boolean; data?: string };
-      if (safe.success && typeof safe.data === "string") id = safe.data;
+function extractStringId(data: unknown): string {
+  if (typeof data === "string") return data;
+  if (typeof data === "number" && Number.isFinite(data)) return String(data);
+  if (data && typeof data === "object") {
+    const rec = data as Record<string, unknown>;
+    const directKeys = ["id", "albumId", "album_id", "albumID", "album", "slug"] as const;
+    for (const k of directKeys) {
+      const v = rec[k];
+      if (typeof v === "string" && v.length > 0) return v;
+      if (typeof v === "number" && Number.isFinite(v)) return String(v);
     }
+    if ("data" in rec) {
+      const inner = extractStringId(rec["data"]);
+      if (inner) return inner;
+    }
+    if ("input" in rec) {
+      const inner = extractStringId(rec["input"]);
+      if (inner) return inner;
+    }
+    for (const val of Object.values(rec)) {
+      if (typeof val === "string" && val.length > 0) return val;
+    }
+    for (const val of Object.values(rec)) {
+      if (val && typeof val === "object") {
+        const inner = extractStringId(val);
+        if (inner) return inner;
+      }
+    }
+  }
+  if (Array.isArray(data)) {
+    for (const item of data) {
+      const inner = extractStringId(item);
+      if (inner) return inner;
+    }
+  }
+  return "";
+}
+
+export const getPublicAlbum = createServerFn({ method: "GET" })
+  .handler(async ({ data }) => {
+    const rawData = data;
+    const id = extractStringId(data);
+    console.warn("[getPublicAlbum] raw data shape:", typeof rawData, "-> extracted id:", JSON.stringify(id));
     const client = getSupabaseServerClient();
-    const fallback = FALLBACK_ALBUMS.find((a) => a.id === id) ?? FALLBACK_ALBUMS[0];
+    const matchedFallback = id ? FALLBACK_ALBUMS.find((a) => a.id === id) : undefined;
     if (!client || !id) {
-      return { ok: true as const, album: fallback, source: "fallback" as const };
+      if (matchedFallback) return { ok: true as const, found: true as const, album: matchedFallback, source: "fallback" as const, debug: { id, hasClient: !!client } };
+      return { ok: true as const, found: false as const, album: null, source: "fallback" as const, debug: { id, hasClient: !!client, why: !id ? "empty-id" : "no-supabase-client" } };
     }
     try {
       const albumRes = await getAlbum(id);
       if ("error" in albumRes) {
-        return { ok: true as const, album: fallback, source: "fallback" as const };
+        console.warn("[getPublicAlbum] getAlbum error:", albumRes.error, "for id:", id);
+        if (matchedFallback) return { ok: true as const, found: true as const, album: matchedFallback, source: "fallback" as const, debug: { id, hasClient: true } };
+        return { ok: true as const, found: false as const, album: null, source: "fallback" as const, debug: { id, hasClient: true, why: "getAlbum-error", errorMsg: albumRes.error } };
       }
       const photosRes = await listAlbumPhotos(id);
       const photos: PublicAlbumPhoto[] = "photos" in photosRes
@@ -174,9 +206,10 @@ export const getPublicAlbum = createServerFn({ method: "GET" })
         photo_count: photos.length,
         photos,
       };
-      return { ok: true as const, album, source: "database" as const };
+      return { ok: true as const, found: true as const, album, source: "database" as const, debug: { id, hasClient: true } };
     } catch (err) {
-      console.warn("[album] Falling back to static:", err);
-      return { ok: true as const, album: fallback, source: "fallback" as const };
+      console.warn("[album] Falling back to static:", err, "for id:", id);
+      if (matchedFallback) return { ok: true as const, found: true as const, album: matchedFallback, source: "fallback" as const, debug: { id, hasClient: true } };
+      return { ok: true as const, found: false as const, album: null, source: "fallback" as const, debug: { id, hasClient: true, why: "exception", errorMsg: err instanceof Error ? err.message : String(err) } };
     }
   });
