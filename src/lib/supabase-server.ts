@@ -243,14 +243,22 @@ export async function insertPortfolioItem(
   const client = getSupabaseServerClient();
   const cfgErr = notConfiguredCheck(client);
   if (cfgErr) return cfgErr;
-  const row: PortfolioItemInput = {
+  const row = {
     category: input.category,
     title: input.title,
     location: input.location,
     image_url: input.image_url,
     alt: input.alt,
-    sort_order: typeof input.sort_order === "number" ? input.sort_order : 0,
+  } as {
+    category: string;
+    title: string;
+    location: string;
+    image_url: string;
+    alt: string;
+    sort_order: number;
   };
+  if (typeof input.sort_order === "number") row.sort_order = input.sort_order;
+  else row.sort_order = 0;
   const anyClient = client as unknown as {
     from(table: string): {
       insert(r: unknown): {
@@ -290,7 +298,14 @@ export async function updatePortfolioItem(
       };
     };
   };
-  const { error } = await anyClient.from("portfolio_items").update(patch).eq("id", id);
+  const clean: Record<string, unknown> = {};
+  if (patch.category !== undefined) clean.category = patch.category;
+  if (patch.title !== undefined) clean.title = patch.title;
+  if (patch.location !== undefined) clean.location = patch.location;
+  if (patch.image_url !== undefined) clean.image_url = patch.image_url;
+  if (patch.alt !== undefined) clean.alt = patch.alt;
+  if (patch.sort_order !== undefined) clean.sort_order = patch.sort_order;
+  const { error } = await anyClient.from("portfolio_items").update(clean).eq("id", id);
   if (error) {
     console.error("[supabase] updatePortfolioItem failed:", error);
     return { error: error.message || "Failed to update item." };
@@ -423,4 +438,399 @@ export async function deleteStorageObject(
   }
   return { ok: true };
 }
+
+// ------------------- Albums ---------------------------
+
+export type Album = {
+  id: string;
+  category: string;
+  title: string;
+  location: string;
+  cover_image_url: string;
+  description: string;
+  sort_order: number;
+  created_at: string;
+  updated_at: string;
+};
+
+export type AlbumInput = {
+  category: string;
+  title: string;
+  location: string;
+  cover_image_url?: string;
+  description?: string;
+  sort_order?: number;
+};
+
+export type AlbumPhoto = {
+  id: string;
+  album_id: string;
+  image_url: string;
+  alt: string;
+  caption: string;
+  sort_order: number;
+  created_at: string;
+  updated_at: string;
+};
+
+export type AlbumPhotoInput = {
+  album_id: string;
+  image_url: string;
+  alt?: string;
+  caption?: string;
+  sort_order?: number;
+};
+
+// -- Album CRUD
+
+export async function listAlbums(): Promise<
+  { albums: Album[] } | { error: string }
+> {
+  const client = getSupabaseServerClient();
+  const cfgErr = notConfiguredCheck(client);
+  if (cfgErr) return cfgErr;
+  const anyClient = client as unknown as {
+    from(table: string): {
+      select(cols: string): {
+        order(col: string, opts?: { ascending?: boolean; nullsFirst?: boolean }): {
+          order(col2: string, opts2?: { ascending?: boolean }): Promise<{
+            data: Album[] | null;
+            error: { message?: string } | null;
+          }>;
+        };
+      };
+    };
+  };
+  const { data, error } = await anyClient
+    .from("albums")
+    .select("id,category,title,location,cover_image_url,description,sort_order,created_at,updated_at")
+    .order("sort_order", { ascending: true, nullsFirst: false })
+    .order("created_at", { ascending: true });
+  if (error) {
+    console.error("[supabase] listAlbums failed:", error);
+    return { error: error.message || "Failed to load albums." };
+  }
+  return { albums: data ?? [] };
+}
+
+export async function getAlbum(
+  id: string,
+): Promise<{ album: Album } | { error: string }> {
+  const client = getSupabaseServerClient();
+  const cfgErr = notConfiguredCheck(client);
+  if (cfgErr) return cfgErr;
+  const anyClient = client as unknown as {
+    from(table: string): {
+      select(cols: string): {
+        eq(col: string, val: unknown): {
+          maybeSingle(): Promise<{
+            data: Album | null;
+            error: { message?: string } | null;
+          }>;
+        };
+      };
+    };
+  };
+  const { data, error } = await anyClient
+    .from("albums")
+    .select("*")
+    .eq("id", id)
+    .maybeSingle();
+  if (error) {
+    console.error("[supabase] getAlbum failed:", error);
+    return { error: error.message || "Failed to load album." };
+  }
+  if (!data) return { error: "Album not found." };
+  return { album: data };
+}
+
+export async function insertAlbum(
+  input: AlbumInput,
+): Promise<{ id: string } | { error: string }> {
+  const client = getSupabaseServerClient();
+  const cfgErr = notConfiguredCheck(client);
+  if (cfgErr) return cfgErr;
+  const row = {
+    category: input.category,
+    title: input.title,
+    location: input.location,
+  } as {
+    category: string;
+    title: string;
+    location: string;
+    cover_image_url: string;
+    description: string;
+    sort_order: number;
+  };
+  if (input.cover_image_url !== undefined) row.cover_image_url = input.cover_image_url;
+  else row.cover_image_url = "";
+  if (input.description !== undefined) row.description = input.description;
+  else row.description = "";
+  if (typeof input.sort_order === "number") row.sort_order = input.sort_order;
+  else row.sort_order = 0;
+  const anyClient = client as unknown as {
+    from(table: string): {
+      insert(r: unknown): {
+        select(c: string): {
+          maybeSingle(): Promise<{
+            data: { id: unknown } | null;
+            error: { message?: string } | null;
+          }>;
+        };
+      };
+    };
+  };
+  const { data, error } = await anyClient
+    .from("albums")
+    .insert(row)
+    .select("id")
+    .maybeSingle();
+  if (error) {
+    console.error("[supabase] insertAlbum failed:", error);
+    return { error: error.message || "Failed to create album." };
+  }
+  if (!data || !data.id) return { error: "No id returned." };
+  return { id: String(data.id) };
+}
+
+export async function updateAlbum(
+  id: string,
+  patch: Partial<AlbumInput>,
+): Promise<{ ok: true } | { error: string }> {
+  const client = getSupabaseServerClient();
+  const cfgErr = notConfiguredCheck(client);
+  if (cfgErr) return cfgErr;
+  const anyClient = client as unknown as {
+    from(table: string): {
+      update(p: unknown): {
+        eq(col: string, val: unknown): Promise<{ error: { message?: string } | null }>;
+      };
+    };
+  };
+  const clean: Record<string, unknown> = {};
+  if (patch.category !== undefined) clean.category = patch.category;
+  if (patch.title !== undefined) clean.title = patch.title;
+  if (patch.location !== undefined) clean.location = patch.location;
+  if (patch.cover_image_url !== undefined) clean.cover_image_url = patch.cover_image_url;
+  if (patch.description !== undefined) clean.description = patch.description;
+  if (patch.sort_order !== undefined) clean.sort_order = patch.sort_order;
+  const { error } = await anyClient.from("albums").update(clean).eq("id", id);
+  if (error) {
+    console.error("[supabase] updateAlbum failed:", error);
+    return { error: error.message || "Failed to update album." };
+  }
+  return { ok: true };
+}
+
+export async function reorderAlbums(
+  orderedIds: string[],
+): Promise<{ ok: true } | { error: string }> {
+  const client = getSupabaseServerClient();
+  const cfgErr = notConfiguredCheck(client);
+  if (cfgErr) return cfgErr;
+  type Updater = {
+    update(p: unknown): {
+      eq(col: string, val: unknown): Promise<{ error: { message?: string } | null }>;
+    };
+  };
+  const anyClient = client as unknown as {
+    from(t: string): Updater;
+  };
+  const ids = orderedIds.filter(Boolean);
+  for (let i = 0; i < ids.length; i++) {
+    const id = ids[i];
+    if (!id) continue;
+    const { error } = await anyClient.from("albums").update({ sort_order: i }).eq("id", id);
+    if (error) {
+      console.error("[supabase] reorderAlbums failed:", error);
+      return { error: error.message || "Failed to save order." };
+    }
+  }
+  return { ok: true };
+}
+
+export async function deleteAlbum(
+  id: string,
+): Promise<{ ok: true } | { error: string }> {
+  const client = getSupabaseServerClient();
+  const cfgErr = notConfiguredCheck(client);
+  if (cfgErr) return cfgErr;
+  const anyClient = client as unknown as {
+    from(table: string): {
+      delete(): {
+        eq(col: string, val: unknown): Promise<{ error: { message?: string } | null }>;
+      };
+    };
+  };
+  const { error } = await anyClient.from("albums").delete().eq("id", id);
+  if (error) {
+    console.error("[supabase] deleteAlbum failed:", error);
+    return { error: error.message || "Failed to delete album." };
+  }
+  return { ok: true };
+}
+
+// -- Album Photo CRUD
+
+export async function listAlbumPhotos(
+  albumId: string,
+): Promise<{ photos: AlbumPhoto[] } | { error: string }> {
+  const client = getSupabaseServerClient();
+  const cfgErr = notConfiguredCheck(client);
+  if (cfgErr) return cfgErr;
+  const anyClient = client as unknown as {
+    from(table: string): {
+      select(cols: string): {
+        eq(col: string, val: unknown): {
+          order(col: string, opts?: { ascending?: boolean; nullsFirst?: boolean }): {
+            order(col2: string, opts2?: { ascending?: boolean }): Promise<{
+              data: AlbumPhoto[] | null;
+              error: { message?: string } | null;
+            }>;
+          };
+        };
+      };
+    };
+  };
+  const { data, error } = await anyClient
+    .from("album_photos")
+    .select("id,album_id,image_url,alt,caption,sort_order,created_at,updated_at")
+    .eq("album_id", albumId)
+    .order("sort_order", { ascending: true, nullsFirst: false })
+    .order("created_at", { ascending: true });
+  if (error) {
+    console.error("[supabase] listAlbumPhotos failed:", error);
+    return { error: error.message || "Failed to load photos." };
+  }
+  return { photos: data ?? [] };
+}
+
+export async function insertAlbumPhoto(
+  input: AlbumPhotoInput,
+): Promise<{ id: string } | { error: string }> {
+  const client = getSupabaseServerClient();
+  const cfgErr = notConfiguredCheck(client);
+  if (cfgErr) return cfgErr;
+  const row = {
+    album_id: input.album_id,
+    image_url: input.image_url,
+  } as {
+    album_id: string;
+    image_url: string;
+    alt: string;
+    caption: string;
+    sort_order: number;
+  };
+  if (input.alt !== undefined) row.alt = input.alt;
+  else row.alt = "";
+  if (input.caption !== undefined) row.caption = input.caption;
+  else row.caption = "";
+  if (typeof input.sort_order === "number") row.sort_order = input.sort_order;
+  else row.sort_order = 0;
+  const anyClient = client as unknown as {
+    from(table: string): {
+      insert(r: unknown): {
+        select(c: string): {
+          maybeSingle(): Promise<{
+            data: { id: unknown } | null;
+            error: { message?: string } | null;
+          }>;
+        };
+      };
+    };
+  };
+  const { data, error } = await anyClient
+    .from("album_photos")
+    .insert(row)
+    .select("id")
+    .maybeSingle();
+  if (error) {
+    console.error("[supabase] insertAlbumPhoto failed:", error);
+    return { error: error.message || "Failed to add photo." };
+  }
+  if (!data || !data.id) return { error: "No id returned." };
+  return { id: String(data.id) };
+}
+
+export async function updateAlbumPhoto(
+  id: string,
+  patch: Partial<Omit<AlbumPhotoInput, "album_id">>,
+): Promise<{ ok: true } | { error: string }> {
+  const client = getSupabaseServerClient();
+  const cfgErr = notConfiguredCheck(client);
+  if (cfgErr) return cfgErr;
+  const anyClient = client as unknown as {
+    from(table: string): {
+      update(p: unknown): {
+        eq(col: string, val: unknown): Promise<{ error: { message?: string } | null }>;
+      };
+    };
+  };
+  const clean: Record<string, unknown> = {};
+  if (patch.image_url !== undefined) clean.image_url = patch.image_url;
+  if (patch.alt !== undefined) clean.alt = patch.alt;
+  if (patch.caption !== undefined) clean.caption = patch.caption;
+  if (patch.sort_order !== undefined) clean.sort_order = patch.sort_order;
+  const { error } = await anyClient.from("album_photos").update(clean).eq("id", id);
+  if (error) {
+    console.error("[supabase] updateAlbumPhoto failed:", error);
+    return { error: error.message || "Failed to update photo." };
+  }
+  return { ok: true };
+}
+
+export async function reorderAlbumPhotos(
+  orderedIds: string[],
+): Promise<{ ok: true } | { error: string }> {
+  const client = getSupabaseServerClient();
+  const cfgErr = notConfiguredCheck(client);
+  if (cfgErr) return cfgErr;
+  type Updater = {
+    update(p: unknown): {
+      eq(col: string, val: unknown): Promise<{ error: { message?: string } | null }>;
+    };
+  };
+  const anyClient = client as unknown as {
+    from(t: string): Updater;
+  };
+  const ids = orderedIds.filter(Boolean);
+  for (let i = 0; i < ids.length; i++) {
+    const id = ids[i];
+    if (!id) continue;
+    const { error } = await anyClient.from("album_photos").update({ sort_order: i }).eq("id", id);
+    if (error) {
+      console.error("[supabase] reorderAlbumPhotos failed:", error);
+      return { error: error.message || "Failed to save photo order." };
+    }
+  }
+  return { ok: true };
+}
+
+export async function deleteAlbumPhoto(
+  id: string,
+): Promise<{ ok: true } | { error: string }> {
+  const client = getSupabaseServerClient();
+  const cfgErr = notConfiguredCheck(client);
+  if (cfgErr) return cfgErr;
+  const anyClient = client as unknown as {
+    from(table: string): {
+      delete(): {
+        eq(col: string, val: unknown): Promise<{ error: { message?: string } | null }>;
+      };
+    };
+  };
+  const { error } = await anyClient.from("album_photos").delete().eq("id", id);
+  if (error) {
+    console.error("[supabase] deleteAlbumPhoto failed:", error);
+    return { error: error.message || "Failed to delete photo." };
+  }
+  return { ok: true };
+}
+
+export function extractStoragePath(url: string): string {
+  if (!url) return "";
+  const match = url.match(/\/storage\/v1\/object\/public\/[^/]+\/([^?]+)/);
+  return match ? decodeURIComponent(match[1] ?? "") : "";
+}
+
 

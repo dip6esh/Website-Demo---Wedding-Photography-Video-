@@ -1,9 +1,14 @@
 import { createFileRoute, useRouter } from "@tanstack/react-router";
 import {
+  Album as AlbumIcon,
   ArrowBigDown,
   ArrowBigUp,
+  BookOpen,
   Check,
+  ChevronDown,
+  ChevronUp,
   GripVertical,
+  Image as ImageIcon,
   ImagePlus,
   Loader2,
   LogOut,
@@ -11,6 +16,7 @@ import {
   Plus,
   Save,
   ShieldCheck,
+  Star,
   Trash2,
   UploadCloud,
   X,
@@ -18,15 +24,20 @@ import {
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { categories } from "@/lib/site-content";
 import {
+  addAlbumPhoto,
   adminLogin,
   adminLogout,
   adminMe,
   adminSignUp,
-  createPortfolioItem,
-  deletePortfolio,
-  listPortfolio,
-  reorderPortfolio,
-  updatePortfolio,
+  createAlbum as createAlbumFn,
+  deleteAlbumAdmin,
+  deleteAlbumPhotoAdmin,
+  listAlbumsAdmin,
+  listPhotosForAlbum,
+  reorderAlbumPhotosAdmin,
+  reorderAlbumsAdmin,
+  updateAlbumAdmin,
+  updateAlbumPhotoAdmin,
   uploadPortfolioImageFn,
 } from "./-_admin";
 
@@ -43,14 +54,27 @@ export const Route = createFileRoute("/admin")({
 
 const CATEGORIES = (categories as readonly string[]).filter((c) => c !== "All");
 
-type Item = {
+type AlbumRow = {
   id: string;
   category: string;
   title: string;
   location: string;
+  cover_image_url: string;
+  description: string;
+  sort_order: number;
+  created_at: string;
+  updated_at: string;
+};
+
+type PhotoRow = {
+  id: string;
+  album_id: string;
   image_url: string;
   alt: string;
+  caption: string;
   sort_order: number;
+  created_at: string;
+  updated_at: string;
 };
 
 function AdminRoute() {
@@ -66,14 +90,8 @@ function AdminRoute() {
     };
   }, []);
 
-  if (authed === "loading") {
-    return <CenteredLoading />;
-  }
-
-  if (authed === false) {
-    return <LoginScreen onLoggedIn={() => setAuthed(true)} />;
-  }
-
+  if (authed === "loading") return <CenteredLoading />;
+  if (authed === false) return <LoginScreen onLoggedIn={() => setAuthed(true)} />;
   return <AdminScreen onLoggedOut={() => setAuthed(false)} />;
 }
 
@@ -113,9 +131,7 @@ function LoginScreen({ onLoggedIn }: { onLoggedIn: () => void }) {
               },
             });
       if (r.ok) {
-        if (r.cookie) {
-          document.cookie = r.cookie;
-        }
+        if (r.cookie) document.cookie = r.cookie;
         const verified = await adminMe();
         if (verified.ok) {
           onLoggedIn();
@@ -248,11 +264,12 @@ function LoginScreen({ onLoggedIn }: { onLoggedIn: () => void }) {
 // --------------------------- ADMIN SCREEN ---------------------------
 
 function AdminScreen({ onLoggedOut }: { onLoggedOut: () => void }) {
-  const [items, setItems] = useState<Item[]>([]);
+  const [albums, setAlbums] = useState<AlbumRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | undefined>();
   const [banner, setBanner] = useState<{ kind: "ok" | "err"; text: string } | undefined>();
-  const [editingId, setEditingId] = useState<string | null>(null);
+  const [expandedAlbumId, setExpandedAlbumId] = useState<string | null>(null);
+  const [editingAlbumId, setEditingAlbumId] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
   const [saving, setSaving] = useState(false);
   const [reorderDirty, setReorderDirty] = useState(false);
@@ -261,12 +278,12 @@ function AdminScreen({ onLoggedOut }: { onLoggedOut: () => void }) {
   async function reload(silent = false) {
     if (!silent) setLoading(true);
     setLoadError(undefined);
-    const r = await listPortfolio();
+    const r = await listAlbumsAdmin();
     if (!silent) setLoading(false);
-    if ("items" in r) {
-      setItems(r.items as Item[]);
+    if ("albums" in r) {
+      setAlbums(r.albums as AlbumRow[]);
     } else {
-      setLoadError(r.message ?? "Could not load works.");
+      setLoadError(r.message ?? "Could not load albums.");
     }
   }
 
@@ -280,22 +297,22 @@ function AdminScreen({ onLoggedOut }: { onLoggedOut: () => void }) {
   }
 
   async function move(index: number, dir: -1 | 1) {
-    const next = items.slice();
+    const next = albums.slice();
     const target = index + dir;
     if (target < 0 || target >= next.length) return;
     const [row] = next.splice(index, 1);
     if (row) next.splice(target, 0, row);
-    setItems(next);
+    setAlbums(next);
     setReorderDirty(true);
   }
 
   async function saveOrder() {
     setSaving(true);
     try {
-      const r = await reorderPortfolio({ data: { ids: items.map((i) => i.id) } });
+      const r = await reorderAlbumsAdmin({ data: { ids: albums.map((i) => i.id) } });
       if (r.ok) {
         setReorderDirty(false);
-        toastBanner("ok", "Order saved.");
+        toastBanner("ok", "Album order saved.");
         await reload(true);
       } else {
         toastBanner("err", r.message ?? "Failed to save order.");
@@ -307,20 +324,21 @@ function AdminScreen({ onLoggedOut }: { onLoggedOut: () => void }) {
     }
   }
 
-  async function removeItem(id: string) {
-    if (!window.confirm("Delete this portfolio item? Its image (if uploaded through this panel) will also be removed from storage.")) return;
+  async function removeAlbum(id: string) {
+    if (!window.confirm("Delete this album? All its photos and uploaded images will be removed permanently.")) return;
     setSaving(true);
     try {
-      const r = await deletePortfolio({ data: { id } });
+      const r = await deleteAlbumAdmin({ data: { id } });
       if (r.ok) {
-        toastBanner("ok", "Item deleted.");
-        setEditingId((cur) => (cur === id ? null : cur));
+        toastBanner("ok", "Album deleted.");
+        setExpandedAlbumId((cur) => (cur === id ? null : cur));
+        setEditingAlbumId((cur) => (cur === id ? null : cur));
         await reload(true);
       } else {
         toastBanner("err", r.message ?? "Failed to delete.");
       }
     } catch {
-      toastBanner("err", "Network error deleting item.");
+      toastBanner("err", "Network error deleting album.");
     } finally {
       setSaving(false);
     }
@@ -329,14 +347,14 @@ function AdminScreen({ onLoggedOut }: { onLoggedOut: () => void }) {
   return (
     <main className="min-h-screen bg-background">
       <header className="border-b border-foreground/15 sticky top-0 z-10 bg-background/85 backdrop-blur">
-        <div className="mx-auto flex max-w-6xl items-center justify-between gap-4 px-5 py-4">
+        <div className="mx-auto flex max-w-7xl items-center justify-between gap-4 px-5 py-4">
           <div className="flex items-center gap-3">
             <span className="grid size-9 place-items-center rounded-full bg-primary/15 text-primary">
               <ShieldCheck size={17} />
             </span>
             <div>
               <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-foreground/55">Admin · Vessel Studio</p>
-              <h1 className="font-display text-lg font-semibold">Works manager</h1>
+              <h1 className="font-display text-lg font-semibold">Albums manager</h1>
             </div>
           </div>
           <div className="flex items-center gap-2">
@@ -366,7 +384,7 @@ function AdminScreen({ onLoggedOut }: { onLoggedOut: () => void }) {
 
       {banner ? (
         <div
-          className={`mx-auto max-w-6xl px-5 pt-5 ${
+          className={`mx-auto max-w-7xl px-5 pt-5 ${
             banner.kind === "ok" ? "text-emerald-700 dark:text-emerald-400" : "text-destructive"
           }`}
         >
@@ -382,13 +400,13 @@ function AdminScreen({ onLoggedOut }: { onLoggedOut: () => void }) {
         </div>
       ) : null}
 
-      <section className="mx-auto max-w-6xl px-5 py-8 md:py-10">
+      <section className="mx-auto max-w-7xl px-5 py-8 md:py-10">
         <div className="flex flex-wrap items-end justify-between gap-4 mb-6">
           <div>
-            <h2 className="font-display text-2xl font-semibold md:text-3xl">Portfolio items</h2>
-            <p className="mt-1 text-sm text-foreground/60 max-w-[52ch]">
-              Order, edit images and titles. Drag isn&apos;t wired yet — use the arrow buttons to reorder, then
-              click Save order. Changes appear on the public <a href="/works" className="text-primary underline-offset-2 hover:underline">/works</a> page immediately.
+            <h2 className="font-display text-2xl font-semibold md:text-3xl">Albums</h2>
+            <p className="mt-1 text-sm text-foreground/60 max-w-[56ch]">
+              Create an album per project (e.g. &ldquo;Ankit and Urvi&rdquo;) under a service category, then add multiple photos,
+              a cover image, and a brief description. Visitors click albums on /works to see the full gallery.
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
@@ -405,12 +423,13 @@ function AdminScreen({ onLoggedOut }: { onLoggedOut: () => void }) {
             <button
               type="button"
               onClick={() => {
-                setEditingId(null);
+                setExpandedAlbumId(null);
+                setEditingAlbumId(null);
                 setCreating(true);
               }}
               className="inline-flex items-center gap-2 rounded-full bg-foreground px-4 py-2 text-sm font-medium text-background hover:-translate-y-0.5 transition-transform active:translate-y-0"
             >
-              <Plus size={14} /> New item
+              <Plus size={14} /> New album
             </button>
           </div>
         </div>
@@ -424,64 +443,80 @@ function AdminScreen({ onLoggedOut }: { onLoggedOut: () => void }) {
         {loading ? (
           <div className="rounded-xl bg-card p-10 ring-1 ring-foreground/10 text-center">
           <Loader2 size={20} className="mx-auto animate-spin text-primary" />
-          <p className="mt-3 text-sm text-foreground/60">Loading works…</p>
+          <p className="mt-3 text-sm text-foreground/60">Loading albums…</p>
         </div>
-        ) : items.length === 0 && !creating ? (
-          <EmptyState onAdd={() => setCreating(true)} />
+        ) : albums.length === 0 && !creating ? (
+          <EmptyAlbumsState onAdd={() => setCreating(true)} />
         ) : null}
 
-        {!loading && items.length ? (
-          <div className="space-y-3">
-            {items.map((item, index) => (
-              <ItemRow
-                key={item.id}
-                item={item}
+        {!loading && albums.length ? (
+          <div className="space-y-4">
+            {albums.map((album, index) => (
+              <AlbumCard
+                key={album.id}
+                album={album}
                 index={index}
-                total={items.length}
-                editing={editingId === item.id}
+                total={albums.length}
+                expanded={expandedAlbumId === album.id}
+                editing={editingAlbumId === album.id}
                 saving={saving}
+                onToggleExpand={() =>
+                  setExpandedAlbumId((cur) => (cur === album.id ? null : album.id))
+                }
                 onEdit={() => {
                   setCreating(false);
-                  setEditingId((cur) => (cur === item.id ? null : item.id));
+                  setExpandedAlbumId(album.id);
+                  setEditingAlbumId((cur) => (cur === album.id ? null : album.id));
                 }}
                 onMoveUp={() => move(index, -1)}
                 onMoveDown={() => move(index, 1)}
                 onSave={(patch) =>
-                  handlePatch(item.id, patch, (t) => toastBanner(t.kind, t.text))
+                  handleAlbumSave(album.id, patch, (t) => toastBanner(t.kind, t.text))
                 }
-                onDelete={() => removeItem(item.id)}
+                onDelete={() => removeAlbum(album.id)}
                 onSavedReload={() => reload(true)}
+                onSetCover={(photoId, url) =>
+                  handleSetCover(album.id, photoId, url, (t) => toastBanner(t.kind, t.text))
+                }
                 categories={CATEGORIES}
+                onBanner={(k, t) => toastBanner(k, t)}
               />
             ))}
           </div>
         ) : null}
 
         {creating ? (
-          <CreateItemForm
+          <CreateAlbumForm
             categories={CATEGORIES}
             defaults={{
               category: "Weddings",
               title: "",
               location: "",
-              image_url: "",
-              alt: "",
+              cover_image_url: "",
+              description: "",
             }}
             saving={saving}
             onCancel={() => setCreating(false)}
             onSubmit={async (input) => {
               setSaving(true);
               try {
-                const r = await createPortfolioItem({ data: input });
+                const r = await createAlbumFn({ data: input });
                 if (r.ok) {
-                  toastBanner("ok", "Item created.");
+                  toastBanner("ok", "Album created. Now add your photos below.");
                   setCreating(false);
                   await reload(true);
+                  setTimeout(() => {
+                    setAlbums((cur) => {
+                      const last = cur[cur.length - 1];
+                      if (last) setExpandedAlbumId(last.id);
+                      return cur;
+                    });
+                  }, 100);
                 } else {
                   toastBanner("err", r.message ?? "Failed to create.");
                 }
               } catch {
-                toastBanner("err", "Network error creating item.");
+                toastBanner("err", "Network error creating album.");
               } finally {
                 setSaving(false);
               }
@@ -493,87 +528,143 @@ function AdminScreen({ onLoggedOut }: { onLoggedOut: () => void }) {
   );
 }
 
-type ItemPatch = {
+type AlbumPatch = {
   category: string;
   title: string;
   location: string;
-  image_url: string;
-  alt: string;
+  cover_image_url: string;
+  description: string;
 };
 
-async function handlePatch(
+async function handleAlbumSave(
   id: string,
-  patch: ItemPatch,
+  patch: AlbumPatch,
   toast: (t: { kind: "ok" | "err"; text: string }) => void,
 ) {
-  const r = await updatePortfolio({ data: { id, ...patch } });
+  const r = await updateAlbumAdmin({ data: { id, ...patch } });
   if (r.ok) {
-    toast({ kind: "ok", text: "Changes saved." });
+    toast({ kind: "ok", text: "Album details saved." });
   } else {
     toast({ kind: "err", text: r.message ?? "Failed to save changes." });
   }
   return r.ok;
 }
 
-function EmptyState({ onAdd }: { onAdd: () => void }) {
+async function handleSetCover(
+  albumId: string,
+  photoId: string,
+  url: string,
+  toast: (t: { kind: "ok" | "err"; text: string }) => void,
+) {
+  void photoId;
+  const r = await updateAlbumAdmin({ data: { id: albumId, cover_image_url: url } });
+  if (r.ok) {
+    toast({ kind: "ok", text: "Cover image updated." });
+  } else {
+    toast({ kind: "err", text: r.message ?? "Failed to set cover." });
+  }
+  return r.ok;
+}
+
+function EmptyAlbumsState({ onAdd }: { onAdd: () => void }) {
   return (
     <div className="rounded-xl border border-dashed border-foreground/20 p-10 text-center ring-1 ring-foreground/5">
-      <ImagePlus size={26} className="mx-auto text-foreground/40" />
-      <h3 className="mt-4 font-display text-xl font-semibold">No portfolio items yet</h3>
+      <AlbumIcon size={26} className="mx-auto text-foreground/40" />
+      <h3 className="mt-4 font-display text-xl font-semibold">No albums yet</h3>
       <p className="mt-2 text-sm text-foreground/60">
-        The 8 default items in Supabase should appear here automatically after you ran the SQL script.
-        If they don&apos;t, press Refresh, or add a new item to get started.
+        Create your first album (e.g. a wedding project) and add photos inside. Run the SQL migration file
+        <code className="mx-1 rounded bg-foreground/5 px-1.5 py-0.5 text-[11px]">supabase/migrations/0003_albums_and_photos.sql</code>
+        in the Supabase SQL editor to enable storage and seed default albums.
       </p>
       <button
         type="button"
         onClick={onAdd}
         className="mt-5 inline-flex items-center gap-2 rounded-full bg-foreground px-4 py-2 text-sm font-medium text-background"
       >
-        <Plus size={14} /> Add first item
+        <Plus size={14} /> Add first album
       </button>
     </div>
   );
 }
 
-// --------------------------- EDIT ROW ---------------------------
+// --------------------------- ALBUM CARD + PHOTO MANAGER ---------------------------
 
-function ItemRow(props: {
-  item: Item;
+function AlbumCard(props: {
+  album: AlbumRow;
   index: number;
   total: number;
+  expanded: boolean;
   editing: boolean;
   saving: boolean;
   categories: readonly string[];
+  onToggleExpand: () => void;
   onEdit: () => void;
   onMoveUp: () => void;
   onMoveDown: () => void;
-  onSave: (patch: ItemPatch) => Promise<boolean> | boolean;
+  onSave: (patch: AlbumPatch) => Promise<boolean> | boolean;
   onDelete: () => void;
   onSavedReload: () => Promise<void> | void;
+  onSetCover: (photoId: string, url: string) => Promise<boolean> | boolean;
+  onBanner: (k: "ok" | "err", t: string) => void;
 }) {
-  const { item, index, total, editing, saving, categories } = props;
-
-  const [form, setForm] = useState<ItemPatch>({
-    category: item.category,
-    title: item.title,
-    location: item.location,
-    image_url: item.image_url,
-    alt: item.alt,
+  const { album, expanded, editing, saving, categories } = props;
+  const [form, setForm] = useState<AlbumPatch>({
+    category: album.category,
+    title: album.title,
+    location: album.location,
+    cover_image_url: album.cover_image_url,
+    description: album.description,
   });
   const [rowBusy, setRowBusy] = useState(false);
-  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const coverFileRef = useRef<HTMLInputElement | null>(null);
+
+  // Photos state
+  const [photos, setPhotos] = useState<PhotoRow[]>([]);
+  const [photosLoading, setPhotosLoading] = useState(false);
+  const [photosDirty, setPhotosDirty] = useState(false);
+  const [newPhotoUrl, setNewPhotoUrl] = useState("");
+  const [addingPhoto, setAddingPhoto] = useState(false);
+  const photoFileRef = useRef<HTMLInputElement | null>(null);
+  const editingPhotoIdRef = useRef<string | null>(null);
+  const [editingPhotoId, setEditingPhotoId] = useState<string | null>(null);
 
   useEffect(() => {
     setForm({
-      category: item.category,
-      title: item.title,
-      location: item.location,
-      image_url: item.image_url,
-      alt: item.alt,
+      category: album.category,
+      title: album.title,
+      location: album.location,
+      cover_image_url: album.cover_image_url,
+      description: album.description,
     });
-  }, [item.id, item.category, item.title, item.location, item.image_url, item.alt]);
+  }, [
+    album.id,
+    album.category,
+    album.title,
+    album.location,
+    album.cover_image_url,
+    album.description,
+  ]);
 
-  async function saveInlineSave() {
+  useEffect(() => {
+    editingPhotoIdRef.current = editingPhotoId;
+  }, [editingPhotoId]);
+
+  // Load photos when expanded
+  useEffect(() => {
+    if (!expanded) return;
+    let cancelled = false;
+    setPhotosLoading(true);
+    void listPhotosForAlbum({ data: { album_id: album.id } }).then((r) => {
+      if (cancelled) return;
+      setPhotosLoading(false);
+      if ("photos" in r) setPhotos(r.photos as PhotoRow[]);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [expanded, album.id]);
+
+  async function saveAlbumInline() {
     setRowBusy(true);
     try {
       const ok = await props.onSave(form);
@@ -583,7 +674,7 @@ function ItemRow(props: {
     }
   }
 
-  async function handleUpload(file: File) {
+  async function uploadCover(file: File) {
     setRowBusy(true);
     try {
       const bytes = new Uint8Array(await file.arrayBuffer());
@@ -591,7 +682,7 @@ function ItemRow(props: {
         data: { filename: file.name, contentType: file.type, bytes },
       });
       if (r.ok) {
-        setForm((f) => ({ ...f, image_url: r.url }));
+        setForm((f) => ({ ...f, cover_image_url: r.url }));
       } else {
         window.alert(r.message ?? "Upload failed.");
       }
@@ -600,16 +691,137 @@ function ItemRow(props: {
     }
   }
 
+  // -- Photo helpers
+
+  async function reloadPhotos(silent = false) {
+    if (!silent) setPhotosLoading(true);
+    const r = await listPhotosForAlbum({ data: { album_id: album.id } });
+    if (!silent) setPhotosLoading(false);
+    if ("photos" in r) setPhotos(r.photos as PhotoRow[]);
+  }
+
+  async function movePhoto(index: number, dir: -1 | 1) {
+    const next = photos.slice();
+    const target = index + dir;
+    if (target < 0 || target >= next.length) return;
+    const [row] = next.splice(index, 1);
+    if (row) next.splice(target, 0, row);
+    setPhotos(next);
+    setPhotosDirty(true);
+  }
+
+  async function savePhotoOrder() {
+    setRowBusy(true);
+    try {
+      const r = await reorderAlbumPhotosAdmin({ data: { ids: photos.map((p) => p.id) } });
+      if (r.ok) {
+        setPhotosDirty(false);
+        props.onBanner("ok", "Photo order saved.");
+        await reloadPhotos(true);
+      } else {
+        props.onBanner("err", r.message ?? "Failed to save photo order.");
+      }
+    } catch {
+      props.onBanner("err", "Network error saving photo order.");
+    } finally {
+      setRowBusy(false);
+    }
+  }
+
+  async function addPhotoByUrl(url: string) {
+    if (!url.trim()) return;
+    setAddingPhoto(true);
+    try {
+      const r = await addAlbumPhoto({
+        data: { album_id: album.id, image_url: url.trim() },
+      });
+      if (r.ok) {
+        setNewPhotoUrl("");
+        props.onBanner("ok", "Photo added.");
+        await reloadPhotos(true);
+      } else {
+        props.onBanner("err", r.message ?? "Failed to add photo.");
+      }
+    } catch {
+      props.onBanner("err", "Network error adding photo.");
+    } finally {
+      setAddingPhoto(false);
+    }
+  }
+
+  async function uploadPhoto(file: File) {
+    setAddingPhoto(true);
+    try {
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      const up = await uploadPortfolioImageFn({
+        data: { filename: file.name, contentType: file.type, bytes },
+      });
+      if (!up.ok) {
+        window.alert(up.message ?? "Upload failed.");
+        return;
+      }
+      const r = await addAlbumPhoto({
+        data: { album_id: album.id, image_url: up.url },
+      });
+      if (r.ok) {
+        props.onBanner("ok", "Photo uploaded and added.");
+        await reloadPhotos(true);
+      } else {
+        props.onBanner("err", r.message ?? "Failed to save photo.");
+      }
+    } catch {
+      props.onBanner("err", "Network error uploading photo.");
+    } finally {
+      setAddingPhoto(false);
+    }
+  }
+
+  async function savePhoto(p: PhotoRow, patch: { image_url: string; alt: string; caption: string }) {
+    const r = await updateAlbumPhotoAdmin({ data: { id: p.id, ...patch } });
+    if (r.ok) {
+      props.onBanner("ok", "Photo details saved.");
+      await reloadPhotos(true);
+    } else {
+      props.onBanner("err", r.message ?? "Failed to save photo.");
+    }
+    return r.ok;
+  }
+
+  async function deletePhoto(p: PhotoRow) {
+    if (!window.confirm("Delete this photo from the album?")) return;
+    setRowBusy(true);
+    try {
+      const r = await deleteAlbumPhotoAdmin({ data: { id: p.id } });
+      if (r.ok) {
+        props.onBanner("ok", "Photo removed.");
+        // if this was the cover, clear cover on the album
+        if (album.cover_image_url === p.image_url) {
+          setForm((f) => ({ ...f, cover_image_url: "" }));
+        }
+        await reloadPhotos(true);
+      } else {
+        props.onBanner("err", r.message ?? "Failed to delete photo.");
+      }
+    } catch {
+      props.onBanner("err", "Network error deleting photo.");
+    } finally {
+      setRowBusy(false);
+    }
+  }
+
   return (
     <article
-      className={`rounded-xl bg-card ring-1 ring-foreground/10 ${editing ? "ring-2 ring-primary/30" : ""}`}
+      className={`rounded-xl bg-card ring-1 ring-foreground/10 overflow-hidden ${
+        expanded ? "ring-2 ring-primary/20" : ""
+      }`}
     >
+      {/* Album header row */}
       <div className="flex flex-col gap-4 p-4 md:flex-row md:items-start">
+        {/* Order controls */}
         <div className="flex items-center gap-2 md:w-10 md:flex-col md:justify-between md:h-36">
           <button
             type="button"
             className="grid size-8 place-items-center rounded-lg text-foreground/40 hover:text-foreground/80 hover:bg-foreground/5"
-            title="Drag (not wired yet)"
             aria-label="Drag handle"
           >
             <GripVertical size={16} />
@@ -618,7 +830,7 @@ function ItemRow(props: {
             <button
               type="button"
               onClick={props.onMoveUp}
-              disabled={index === 0 || saving}
+              disabled={props.index === 0 || saving}
               className="grid size-8 place-items-center rounded-lg text-foreground/60 hover:bg-foreground/5 disabled:opacity-40"
               aria-label="Move up"
             >
@@ -627,7 +839,7 @@ function ItemRow(props: {
             <button
               type="button"
               onClick={props.onMoveDown}
-              disabled={index >= total - 1 || saving}
+              disabled={props.index >= props.total - 1 || saving}
               className="grid size-8 place-items-center rounded-lg text-foreground/60 hover:bg-foreground/5 disabled:opacity-40"
               aria-label="Move down"
             >
@@ -636,162 +848,481 @@ function ItemRow(props: {
           </div>
         </div>
 
+        {/* Cover thumbnail */}
         <div className="w-28 shrink-0">
           <div className="relative aspect-[4/5] overflow-hidden rounded-lg bg-foreground/5 ring-1 ring-foreground/10">
-            <img
-              src={form.image_url || item.image_url}
-              alt={form.alt || item.title}
-              className="size-full object-cover"
-              onError={(e) => {
-                (e.currentTarget as HTMLImageElement).style.visibility = "hidden";
-              }}
-            />
+            {form.cover_image_url || album.cover_image_url ? (
+              <img
+                src={form.cover_image_url || album.cover_image_url}
+                alt={`${album.title} cover`}
+                className="size-full object-cover"
+                onError={(e) => {
+                  (e.currentTarget as HTMLImageElement).style.visibility = "hidden";
+                }}
+              />
+            ) : (
+              <div className="size-full grid place-items-center text-foreground/30">
+                <ImageIcon size={22} />
+              </div>
+            )}
+            {!form.cover_image_url && !album.cover_image_url && photos[0] ? (
+              <span className="absolute inset-x-0 bottom-0 bg-background/80 text-[10px] px-1 py-0.5 text-center font-mono uppercase tracking-wider">
+                Uses first photo
+              </span>
+            ) : null}
           </div>
         </div>
 
-        {editing ? (
-          <div className="flex-1 grid gap-3 md:grid-cols-2">
-            <label className="space-y-1.5">
-              <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-foreground/55">Category</span>
-              <select
-                value={form.category}
-                onChange={(e) => setForm((f) => ({ ...f, category: e.target.value }))}
-                className="w-full rounded-lg border border-foreground/15 bg-background px-3 py-2 text-sm outline-none focus:border-primary"
+        {/* Meta or edit form */}
+        <div className="flex-1 min-w-0">
+          {editing ? (
+            <div className="grid gap-3 md:grid-cols-2">
+              <label className="space-y-1.5">
+                <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-foreground/55">Category</span>
+                <select
+                  value={form.category}
+                  onChange={(e) => setForm((f) => ({ ...f, category: e.target.value }))}
+                  className="w-full rounded-lg border border-foreground/15 bg-background px-3 py-2 text-sm outline-none focus:border-primary"
+                >
+                  {categories.map((c) => (
+                    <option key={c}>{c}</option>
+                  ))}
+                </select>
+              </label>
+              <label className="space-y-1.5">
+                <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-foreground/55">Title</span>
+                <input
+                  value={form.title}
+                  onChange={(e) => setForm((f) => ({ ...f, title: e.target.value }))}
+                  placeholder="e.g. Ankit and Urvi"
+                  className="w-full rounded-lg border border-foreground/15 bg-background px-3 py-2 text-sm outline-none focus:border-primary"
+                />
+              </label>
+              <label className="space-y-1.5">
+                <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-foreground/55">Location / year</span>
+                <input
+                  value={form.location}
+                  onChange={(e) => setForm((f) => ({ ...f, location: e.target.value }))}
+                  placeholder="e.g. Alibaug · 2025"
+                  className="w-full rounded-lg border border-foreground/15 bg-background px-3 py-2 text-sm outline-none focus:border-primary"
+                />
+              </label>
+              <label className="space-y-1.5">
+                <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-foreground/55">Cover image URL</span>
+                <input
+                  value={form.cover_image_url}
+                  onChange={(e) => setForm((f) => ({ ...f, cover_image_url: e.target.value }))}
+                  placeholder="Optional — uses first photo if blank"
+                  className="w-full rounded-lg border border-foreground/15 bg-background px-3 py-2 text-sm outline-none focus:border-primary"
+                />
+              </label>
+              <label className="md:col-span-2 space-y-1.5">
+                <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-foreground/55">
+                  Brief / description
+                </span>
+                <textarea
+                  value={form.description}
+                  onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
+                  rows={3}
+                  placeholder="A paragraph about this project for the visitor-facing album page."
+                  className="w-full rounded-lg border border-foreground/15 bg-background px-3 py-2 text-sm outline-none focus:border-primary resize-y"
+                />
+              </label>
+              <div className="md:col-span-2 flex flex-wrap items-center gap-2">
+                <input
+                  ref={coverFileRef}
+                  type="file"
+                  accept="image/jpeg,image/png,image/webp,image/gif,image/avif"
+                  hidden
+                  onChange={(e) => {
+                    const f = e.target.files?.[0];
+                    if (f) void uploadCover(f);
+                    if (coverFileRef.current) coverFileRef.current.value = "";
+                  }}
+                />
+                <button
+                  type="button"
+                  onClick={() => coverFileRef.current?.click()}
+                  disabled={rowBusy}
+                  className="inline-flex items-center gap-2 rounded-full px-3 py-2 text-xs font-medium text-foreground/80 ring-1 ring-foreground/15 hover:bg-background disabled:opacity-60"
+                >
+                  {rowBusy ? <Loader2 size={13} className="animate-spin" /> : <UploadCloud size={13} />}
+                  Upload cover
+                </button>
+                <button
+                  type="button"
+                  onClick={saveAlbumInline}
+                  disabled={rowBusy || saving}
+                  className="inline-flex items-center gap-2 rounded-full bg-foreground px-4 py-2 text-sm font-medium text-background disabled:opacity-60"
+                >
+                  <Save size={13} /> Save changes
+                </button>
+                <button
+                  type="button"
+                  onClick={props.onEdit}
+                  className="rounded-full px-3 py-2 text-xs font-medium text-foreground/70 ring-1 ring-foreground/15 hover:bg-background"
+                >
+                  <X size={13} className="mr-1 inline" /> Cancel
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div className="min-w-0">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="rounded-full bg-primary/10 px-2.5 py-1 font-mono text-[10px] uppercase tracking-[0.14em] text-primary">
+                  {album.category}
+                </span>
+                <span className="inline-flex items-center gap-1 text-xs text-foreground/50">
+                  <ImageIcon size={11} />
+                  {photos.length || "—"} photos · Sort {props.index + 1}
+                </span>
+              </div>
+              <h3 className="mt-2 font-display text-base font-semibold md:text-lg">{album.title}</h3>
+              <p className="text-sm text-foreground/65">{album.location}</p>
+              {album.description ? (
+                <p className="mt-2 line-clamp-2 text-sm text-foreground/55">{album.description}</p>
+              ) : null}
+              <div className="mt-3 flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={props.onEdit}
+                  className="inline-flex items-center gap-2 rounded-full px-3 py-1.5 text-xs font-medium text-foreground/80 ring-1 ring-foreground/15 hover:bg-background"
+                >
+                  <Pencil size={13} /> Edit details
+                </button>
+                <button
+                  type="button"
+                  onClick={props.onToggleExpand}
+                  className="inline-flex items-center gap-2 rounded-full px-3 py-1.5 text-xs font-medium text-foreground/80 ring-1 ring-foreground/15 hover:bg-background"
+                >
+                  <BookOpen size={13} />
+                  {expanded ? (
+                    <>
+                      Close photos <ChevronUp size={13} />
+                    </>
+                  ) : (
+                    <>
+                      Manage photos <ChevronDown size={13} />
+                    </>
+                  )}
+                </button>
+                <button
+                  type="button"
+                  onClick={props.onDelete}
+                  disabled={saving}
+                  className="inline-flex items-center gap-2 rounded-full px-3 py-1.5 text-xs font-medium text-destructive/90 ring-1 ring-destructive/20 hover:bg-destructive/5 disabled:opacity-60"
+                >
+                  <Trash2 size={13} /> Delete album
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Expanded: photo manager */}
+      {expanded ? (
+        <div className="border-t border-foreground/10 bg-background/40 p-4 md:p-6 space-y-5">
+          {/* Add photo bar */}
+          <div className="rounded-xl bg-card ring-1 ring-foreground/10 p-4">
+            <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
+              <div>
+                <h4 className="font-display text-sm font-semibold">Add photos to this album</h4>
+                <p className="text-xs text-foreground/55 mt-0.5">
+                  Paste a public URL or upload images directly (JPG, PNG, WebP, GIF, AVIF · max 10MB each).
+                </p>
+              </div>
+              {photosDirty ? (
+                <button
+                  type="button"
+                  onClick={savePhotoOrder}
+                  disabled={rowBusy}
+                  className="inline-flex items-center gap-2 rounded-full bg-primary px-3.5 py-1.5 text-xs font-medium text-primary-foreground ring-1 ring-primary/30 disabled:opacity-60"
+                >
+                  <Save size={12} /> Save photo order
+                </button>
+              ) : null}
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <input
+                type="text"
+                placeholder="Paste image URL and press Add…"
+                value={newPhotoUrl}
+                onChange={(e) => setNewPhotoUrl(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && newPhotoUrl.trim()) {
+                    e.preventDefault();
+                    void addPhotoByUrl(newPhotoUrl);
+                  }
+                }}
+                disabled={addingPhoto}
+                className="flex-1 min-w-[240px] rounded-lg border border-foreground/15 bg-background px-3 py-2 text-sm outline-none focus:border-primary disabled:opacity-60"
+              />
+              <button
+                type="button"
+                onClick={() => void addPhotoByUrl(newPhotoUrl)}
+                disabled={addingPhoto || !newPhotoUrl.trim()}
+                className="inline-flex items-center gap-1.5 rounded-full bg-card px-3.5 py-2 text-xs font-medium ring-1 ring-foreground/15 hover:bg-background disabled:opacity-60"
               >
-                {categories.map((c) => (
-                  <option key={c}>{c}</option>
-                ))}
-              </select>
-            </label>
-            <label className="space-y-1.5">
-              <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-foreground/55">Title</span>
+                {addingPhoto ? <Loader2 size={12} className="animate-spin" /> : <Plus size={12} />}
+                Add URL
+              </button>
               <input
-                value={form.title}
-                onChange={(e) => setForm((f) => ({ ...f, title: e.target.value }))}
-                className="w-full rounded-lg border border-foreground/15 bg-background px-3 py-2 text-sm outline-none focus:border-primary"
-              />
-            </label>
-            <label className="space-y-1.5">
-              <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-foreground/55">Location / year</span>
-              <input
-                value={form.location}
-                onChange={(e) => setForm((f) => ({ ...f, location: e.target.value }))}
-                placeholder="e.g. Alibaug · 2025"
-                className="w-full rounded-lg border border-foreground/15 bg-background px-3 py-2 text-sm outline-none focus:border-primary"
-              />
-            </label>
-            <label className="space-y-1.5">
-              <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-foreground/55">Image URL</span>
-              <input
-                value={form.image_url}
-                onChange={(e) => setForm((f) => ({ ...f, image_url: e.target.value }))}
-                className="w-full rounded-lg border border-foreground/15 bg-background px-3 py-2 text-sm outline-none focus:border-primary"
-              />
-            </label>
-            <label className="md:col-span-2 space-y-1.5">
-              <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-foreground/55">Alt text</span>
-              <input
-                value={form.alt}
-                onChange={(e) => setForm((f) => ({ ...f, alt: e.target.value }))}
-                placeholder="Brief description for accessibility"
-                className="w-full rounded-lg border border-foreground/15 bg-background px-3 py-2 text-sm outline-none focus:border-primary"
-              />
-            </label>
-            <div className="md:col-span-2 flex flex-wrap items-center gap-2">
-              <input
-                ref={fileInputRef}
+                ref={photoFileRef}
                 type="file"
+                multiple
                 accept="image/jpeg,image/png,image/webp,image/gif,image/avif"
                 hidden
-                onChange={(e) => {
-                  const f = e.target.files?.[0];
-                  if (f) void handleUpload(f);
-                  if (fileInputRef.current) fileInputRef.current.value = "";
+                onChange={async (e) => {
+                  const files = Array.from(e.target.files ?? []);
+                  for (const f of files) await uploadPhoto(f);
+                  if (photoFileRef.current) photoFileRef.current.value = "";
                 }}
               />
               <button
                 type="button"
-                onClick={() => fileInputRef.current?.click()}
-                disabled={rowBusy}
-                className="inline-flex items-center gap-2 rounded-full px-3 py-2 text-xs font-medium text-foreground/80 ring-1 ring-foreground/15 hover:bg-background disabled:opacity-60"
+                onClick={() => photoFileRef.current?.click()}
+                disabled={addingPhoto}
+                className="inline-flex items-center gap-1.5 rounded-full bg-foreground px-3.5 py-2 text-xs font-medium text-background disabled:opacity-60"
               >
-                {rowBusy ? <Loader2 size={13} className="animate-spin" /> : <UploadCloud size={13} />}
-                {rowBusy ? "Uploading..." : "Upload new image"}
-              </button>
-              <button
-                type="button"
-                onClick={saveInlineSave}
-                disabled={rowBusy || saving}
-                className="inline-flex items-center gap-2 rounded-full bg-foreground px-4 py-2 text-sm font-medium text-background disabled:opacity-60"
-              >
-                <Save size={13} /> Save changes
-              </button>
-              <button
-                type="button"
-                onClick={props.onEdit}
-                className="rounded-full px-3 py-2 text-xs font-medium text-foreground/70 ring-1 ring-foreground/15 hover:bg-background"
-              >
-                <X size={13} className="mr-1 inline" /> Cancel
+                {addingPhoto ? <Loader2 size={12} className="animate-spin" /> : <ImagePlus size={12} />}
+                {addingPhoto ? "Uploading..." : "Upload images"}
               </button>
             </div>
           </div>
-        ) : (
-          <div className="flex-1 min-w-0">
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="rounded-full bg-primary/10 px-2.5 py-1 font-mono text-[10px] uppercase tracking-[0.14em] text-primary">
-                {item.category}
-              </span>
-              <span className="text-xs text-foreground/50">Sort {index + 1} · DB {item.sort_order}</span>
+
+          {/* Photo grid */}
+          {photosLoading ? (
+            <div className="text-center py-8 text-sm text-foreground/55">
+              <Loader2 size={16} className="mx-auto animate-spin text-primary" />
+              <p className="mt-2">Loading photos…</p>
             </div>
-            <h3 className="mt-2 font-display text-base font-semibold md:text-lg">{item.title}</h3>
-            <p className="text-sm text-foreground/65">{item.location}</p>
-            {item.alt ? (
-              <p className="mt-2 line-clamp-1 text-xs text-foreground/45">
-                Alt: {item.alt}
-              </p>
-            ) : null}
-            <div className="mt-3 flex flex-wrap items-center gap-2">
-              <button
-                type="button"
-                onClick={props.onEdit}
-                className="inline-flex items-center gap-2 rounded-full px-3 py-1.5 text-xs font-medium text-foreground/80 ring-1 ring-foreground/15 hover:bg-background"
-              >
-                <Pencil size={13} /> Edit
-              </button>
-              <button
-                type="button"
-                onClick={props.onDelete}
-                disabled={saving}
-                className="inline-flex items-center gap-2 rounded-full px-3 py-1.5 text-xs font-medium text-destructive/90 ring-1 ring-destructive/20 hover:bg-destructive/5 disabled:opacity-60"
-              >
-                <Trash2 size={13} /> Delete
-              </button>
+          ) : photos.length === 0 ? (
+            <div className="rounded-xl border border-dashed border-foreground/15 p-8 text-center text-sm text-foreground/50">
+              <ImagePlus size={22} className="mx-auto text-foreground/30" />
+              <p className="mt-3">No photos yet. Use the bar above to add them.</p>
             </div>
-          </div>
-        )}
-      </div>
+          ) : (
+            <div className="grid gap-3 grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
+              {photos.map((p, idx) => (
+                <PhotoCard
+                  key={p.id}
+                  photo={p}
+                  index={idx}
+                  total={photos.length}
+                  isCover={(form.cover_image_url || album.cover_image_url || photos[0]?.image_url || "") === p.image_url}
+                  editing={editingPhotoId === p.id}
+                  disabled={rowBusy || addingPhoto}
+                  onToggleEdit={() => {
+                    const cur = editingPhotoIdRef.current;
+                    setEditingPhotoId(cur === p.id ? null : p.id);
+                  }}
+                  onMoveUp={() => movePhoto(idx, -1)}
+                  onMoveDown={() => movePhoto(idx, 1)}
+                  onSave={(patch) => savePhoto(p, patch)}
+                  onSetCover={async () => {
+                    const ok = await props.onSetCover(p.id, p.image_url);
+                    if (ok) {
+                      setForm((f) => ({ ...f, cover_image_url: p.image_url }));
+                    }
+                    return !!ok;
+                  }}
+                  onDelete={() => deletePhoto(p)}
+                />
+              ))}
+            </div>
+          )}
+        </div>
+      ) : null}
     </article>
   );
 }
 
-// --------------------------- CREATE FORM ---------------------------
+// --------------------------- PHOTO CARD ---------------------------
 
-function CreateItemForm(props: {
+function PhotoCard(props: {
+  photo: PhotoRow;
+  index: number;
+  total: number;
+  isCover: boolean;
+  editing: boolean;
+  disabled: boolean;
+  onToggleEdit: () => void;
+  onMoveUp: () => void;
+  onMoveDown: () => void;
+  onSave: (patch: { image_url: string; alt: string; caption: string }) => Promise<boolean> | boolean;
+  onSetCover: () => Promise<boolean> | boolean;
+  onDelete: () => void;
+}) {
+  const { photo, editing, disabled, isCover } = props;
+  const [form, setForm] = useState({
+    image_url: photo.image_url,
+    alt: photo.alt,
+    caption: photo.caption,
+  });
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    setForm({ image_url: photo.image_url, alt: photo.alt, caption: photo.caption });
+  }, [photo.id, photo.image_url, photo.alt, photo.caption]);
+
+  async function save() {
+    setBusy(true);
+    try {
+      await props.onSave(form);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div
+      className={`group relative rounded-xl overflow-hidden bg-card ring-1 transition-all ${
+        isCover ? "ring-2 ring-primary shadow-md" : "ring-foreground/10"
+      }`}
+    >
+      <div className="relative aspect-square overflow-hidden bg-foreground/5">
+        <img
+          src={editing ? form.image_url : photo.image_url}
+          alt={photo.alt || photo.caption || "album photo"}
+          className="size-full object-cover"
+          onError={(e) => {
+            (e.currentTarget as HTMLImageElement).style.visibility = "hidden";
+          }}
+        />
+        {isCover ? (
+          <span className="absolute top-2 left-2 inline-flex items-center gap-1 rounded-full bg-primary px-2 py-0.5 font-mono text-[9px] uppercase tracking-wider text-primary-foreground shadow">
+            <Star size={9} /> Cover
+          </span>
+        ) : null}
+        <div className="absolute top-2 right-2 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+          <button
+            type="button"
+            onClick={props.onMoveUp}
+            disabled={props.index === 0 || disabled}
+            className="grid size-6 place-items-center rounded-md bg-background/85 text-foreground/70 backdrop-blur hover:bg-background disabled:opacity-30"
+            aria-label="Move photo up"
+          >
+            <ChevronUp size={12} />
+          </button>
+          <button
+            type="button"
+            onClick={props.onMoveDown}
+            disabled={props.index >= props.total - 1 || disabled}
+            className="grid size-6 place-items-center rounded-md bg-background/85 text-foreground/70 backdrop-blur hover:bg-background disabled:opacity-30"
+            aria-label="Move photo down"
+          >
+            <ChevronDown size={12} />
+          </button>
+        </div>
+      </div>
+
+      {editing ? (
+        <div className="p-2.5 space-y-2 bg-background/50 border-t border-foreground/10">
+          <label className="block space-y-1">
+            <span className="font-mono text-[9px] uppercase tracking-widest text-foreground/50">Image URL</span>
+            <input
+              value={form.image_url}
+              onChange={(e) => setForm((f) => ({ ...f, image_url: e.target.value }))}
+              className="w-full rounded-md border border-foreground/15 bg-background px-2 py-1.5 text-[11px] outline-none focus:border-primary"
+            />
+          </label>
+          <label className="block space-y-1">
+            <span className="font-mono text-[9px] uppercase tracking-widest text-foreground/50">Alt text</span>
+            <input
+              value={form.alt}
+              onChange={(e) => setForm((f) => ({ ...f, alt: e.target.value }))}
+              placeholder="accessibility"
+              className="w-full rounded-md border border-foreground/15 bg-background px-2 py-1.5 text-[11px] outline-none focus:border-primary"
+            />
+          </label>
+          <label className="block space-y-1">
+            <span className="font-mono text-[9px] uppercase tracking-widest text-foreground/50">Caption</span>
+            <input
+              value={form.caption}
+              onChange={(e) => setForm((f) => ({ ...f, caption: e.target.value }))}
+              placeholder="(optional)"
+              className="w-full rounded-md border border-foreground/15 bg-background px-2 py-1.5 text-[11px] outline-none focus:border-primary"
+            />
+          </label>
+          <div className="flex flex-wrap gap-1.5 pt-0.5">
+            <button
+              type="button"
+              onClick={save}
+              disabled={busy || disabled}
+              className="inline-flex items-center gap-1 rounded-full bg-foreground px-2.5 py-1 text-[10px] font-medium text-background disabled:opacity-60"
+            >
+              {busy ? <Loader2 size={10} className="animate-spin" /> : <Save size={10} />} Save
+            </button>
+            <button
+              type="button"
+              onClick={props.onToggleEdit}
+              className="rounded-full px-2.5 py-1 text-[10px] font-medium text-foreground/70 ring-1 ring-foreground/15 hover:bg-background"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      ) : (
+        <div className="p-2 space-y-1">
+          {photo.caption ? (
+            <p className="line-clamp-2 text-[11px] text-foreground/75">{photo.caption}</p>
+          ) : photo.alt ? (
+            <p className="line-clamp-1 text-[11px] text-foreground/50 italic">{photo.alt}</p>
+          ) : (
+            <p className="text-[11px] text-foreground/30 italic">No caption</p>
+          )}
+          <div className="flex flex-wrap gap-1 pt-0.5">
+            <button
+              type="button"
+              onClick={props.onToggleEdit}
+              disabled={disabled}
+              className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[9px] font-medium text-foreground/70 ring-1 ring-foreground/15 hover:bg-background disabled:opacity-50"
+            >
+              <Pencil size={9} /> Edit
+            </button>
+            {!isCover ? (
+              <button
+                type="button"
+                onClick={() => void props.onSetCover()}
+                disabled={disabled}
+                className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[9px] font-medium text-primary/90 ring-1 ring-primary/25 hover:bg-primary/5 disabled:opacity-50"
+              >
+                <Star size={9} /> Set cover
+              </button>
+            ) : null}
+            <button
+              type="button"
+              onClick={props.onDelete}
+              disabled={disabled}
+              className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[9px] font-medium text-destructive/85 ring-1 ring-destructive/20 hover:bg-destructive/5 disabled:opacity-50"
+            >
+              <Trash2 size={9} /> Remove
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// --------------------------- CREATE ALBUM FORM ---------------------------
+
+function CreateAlbumForm(props: {
   categories: readonly string[];
-  defaults: Omit<ItemPatch, "sort_order">;
+  defaults: Omit<AlbumPatch, "sort_order">;
   saving: boolean;
   onCancel: () => void;
-  onSubmit: (input: ItemPatch & { sort_order?: number }) => void;
+  onSubmit: (input: AlbumPatch & { sort_order?: number }) => void;
 }) {
-  const [form, setForm] = useState<ItemPatch>({ ...props.defaults });
+  const [form, setForm] = useState<AlbumPatch>({ ...props.defaults });
   const [busy, setBusy] = useState(false);
-  const fileRef = useRef<HTMLInputElement | null>(null);
+  const coverFileRef = useRef<HTMLInputElement | null>(null);
   const canSubmit = useMemo(
     () =>
       form.category.trim().length >= 2 &&
       form.title.trim().length >= 2 &&
-      form.location.trim().length >= 2 &&
-      form.image_url.trim().length >= 4,
+      form.location.trim().length >= 2,
     [form],
   );
 
@@ -803,7 +1334,7 @@ function CreateItemForm(props: {
         data: { filename: file.name, contentType: file.type, bytes },
       });
       if (r.ok) {
-        setForm((f) => ({ ...f, image_url: r.url }));
+        setForm((f) => ({ ...f, cover_image_url: r.url }));
       } else {
         window.alert(r.message ?? "Upload failed.");
       }
@@ -819,10 +1350,10 @@ function CreateItemForm(props: {
         if (!canSubmit || props.saving || busy) return;
         props.onSubmit({ ...form });
       }}
-      className="mt-8 rounded-2xl bg-card p-5 ring-1 ring-foreground/10 ring-2 ring-primary/20"
+      className="mt-6 rounded-2xl bg-card p-5 ring-1 ring-foreground/10 ring-2 ring-primary/20"
     >
       <div className="flex items-center justify-between mb-4">
-        <h3 className="font-display text-lg font-semibold">New portfolio item</h3>
+        <h3 className="font-display text-lg font-semibold">New album</h3>
         <button
           type="button"
           onClick={props.onCancel}
@@ -850,7 +1381,7 @@ function CreateItemForm(props: {
             required
             value={form.title}
             onChange={(e) => setForm((f) => ({ ...f, title: e.target.value }))}
-            placeholder="e.g. The Ceremony"
+            placeholder="e.g. Ankit and Urvi"
             className="w-full rounded-lg border border-foreground/15 bg-background px-3 py-2 text-sm outline-none focus:border-primary"
           />
         </label>
@@ -865,52 +1396,55 @@ function CreateItemForm(props: {
           />
         </label>
         <label className="space-y-1.5">
-          <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-foreground/55">Image URL</span>
+          <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-foreground/55">
+            Cover image URL (optional)
+          </span>
           <input
-            value={form.image_url}
-            onChange={(e) => setForm((f) => ({ ...f, image_url: e.target.value }))}
-            placeholder="https://... or upload below"
+            value={form.cover_image_url}
+            onChange={(e) => setForm((f) => ({ ...f, cover_image_url: e.target.value }))}
+            placeholder="Leave blank to use the first photo you add"
             className="w-full rounded-lg border border-foreground/15 bg-background px-3 py-2 text-sm outline-none focus:border-primary"
           />
         </label>
         <label className="md:col-span-2 space-y-1.5">
-          <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-foreground/55">Alt text</span>
-          <input
-            value={form.alt}
-            onChange={(e) => setForm((f) => ({ ...f, alt: e.target.value }))}
-            placeholder="Describe the image for screen readers"
-            className="w-full rounded-lg border border-foreground/15 bg-background px-3 py-2 text-sm outline-none focus:border-primary"
+          <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-foreground/55">
+            Brief / description
+          </span>
+          <textarea
+            value={form.description}
+            onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
+            rows={3}
+            placeholder="Tell the story of this project — appears on the visitor-facing album page."
+            className="w-full rounded-lg border border-foreground/15 bg-background px-3 py-2 text-sm outline-none focus:border-primary resize-y"
           />
         </label>
       </div>
       <div className="mt-4 flex flex-wrap items-center gap-3">
         <input
-          ref={fileRef}
+          ref={coverFileRef}
           type="file"
           accept="image/jpeg,image/png,image/webp,image/gif,image/avif"
           hidden
           onChange={(e) => {
             const f = e.target.files?.[0];
             if (f) void upload(f);
-            if (fileRef.current) fileRef.current.value = "";
+            if (coverFileRef.current) coverFileRef.current.value = "";
           }}
         />
         <button
           type="button"
-          onClick={() => fileRef.current?.click()}
+          onClick={() => coverFileRef.current?.click()}
           disabled={busy}
           className="inline-flex items-center gap-2 rounded-full px-4 py-2 text-xs font-medium text-foreground/80 ring-1 ring-foreground/15 hover:bg-background disabled:opacity-60"
         >
           {busy ? <Loader2 size={13} className="animate-spin" /> : <UploadCloud size={13} />}
-          {busy ? "Uploading..." : "Upload image"}
+          {busy ? "Uploading..." : "Upload cover"}
         </button>
-        {form.image_url ? (
-          <span className="text-xs text-foreground/55">
-            Image is set. The preview above shows it live when you save.
-          </span>
+        {form.cover_image_url ? (
+          <span className="text-xs text-foreground/55">Cover is set.</span>
         ) : (
           <span className="text-xs text-foreground/55">
-            Upload a file or paste a URL above.
+            Optional — if left blank, the first photo added to the album becomes the cover.
           </span>
         )}
         <div className="ml-auto flex items-center gap-2">
@@ -927,7 +1461,7 @@ function CreateItemForm(props: {
             className="inline-flex items-center gap-2 rounded-full bg-foreground px-4 py-2 text-sm font-medium text-background disabled:opacity-60"
           >
             {props.saving ? <Loader2 size={13} className="animate-spin" /> : <Check size={13} />}
-            {props.saving ? "Creating..." : "Create item"}
+            {props.saving ? "Creating..." : "Create album"}
           </button>
         </div>
       </div>

@@ -2,20 +2,34 @@ import { createServerFn } from "@tanstack/react-start";
 import { createClient } from "@supabase/supabase-js";
 import { z } from "zod";
 import {
+  deleteAlbum,
+  deleteAlbumPhoto,
   deletePortfolioItem,
   deleteStorageObject,
+  extractStoragePath,
+  getAlbum,
   getSupabaseServerClient,
   getServerEnv,
+  insertAlbum,
+  insertAlbumPhoto,
   insertPortfolioItem,
+  listAlbumPhotos,
+  listAlbums,
   listPortfolioItems,
   PortfolioItem,
   PortfolioItemInput,
   readSupabaseAnonKey,
   readSupabaseServiceRoleKey,
   readSupabaseUrl,
+  reorderAlbumPhotos,
+  reorderAlbums,
   reorderPortfolioItems,
+  updateAlbum,
+  updateAlbumPhoto,
   updatePortfolioItem,
   uploadPortfolioImage,
+  type Album,
+  type AlbumPhoto,
 } from "../lib/supabase-server";
 import {
   AdminSession,
@@ -758,3 +772,232 @@ export const uploadPortfolioImageFn = createServerFn({ method: "POST" })
     if ("error" in res) return { ok: false as const, code: "SERVER" as const, message: res.error };
     return { ok: true as const, url: res.url, path: res.path };
   });
+
+// ---------------- Albums CRUD (Admin) ----------------
+
+const AlbumSchema = z.object({
+  category: z.string().trim().min(2).max(60),
+  title: z.string().trim().min(2).max(160),
+  location: z.string().trim().min(2).max(200),
+  cover_image_url: z.string().trim().max(1000).default(""),
+  description: z.string().trim().max(5000).default(""),
+  sort_order: z.number().int().min(0).optional(),
+});
+
+const AlbumIdSchema = z.object({ album_id: z.string().min(1).max(64) });
+const IdSchema = z.object({ id: z.string().min(1).max(64) });
+const ReorderAlbumsSchema = z.object({ ids: z.array(z.string().min(1)).max(500) });
+const ReorderPhotosSchema = z.object({ ids: z.array(z.string().min(1)).max(2000) });
+
+export const listAlbumsAdmin = createServerFn({ method: "GET" }).handler(async (args) => {
+  debugAuth("listAlbumsAdmin", args);
+  const authed = await isAdminFromCtx(args);
+  if (!authed) return await unauth("listAlbumsAdmin", args);
+  const result = await listAlbums();
+  if ("error" in result) return { ok: false as const, code: "SERVER" as const, message: result.error };
+  return { ok: true as const, albums: result.albums as Album[] };
+});
+
+export const listPhotosForAlbum = createServerFn({ method: "POST" })
+  .validator((body: unknown) => AlbumIdSchema.safeParse(body))
+  .handler(async (args) => {
+    debugAuth("listPhotosForAlbum", args);
+    const authed = await isAdminFromCtx(args);
+    if (!authed) return await unauth("listPhotosForAlbum", args);
+    const parse = (args?.data ?? undefined) as ReturnType<typeof AlbumIdSchema.safeParse> | undefined;
+    if (!parse || !parse.success) return { ok: false as const, code: "VALIDATION" as const, message: "Missing album id." };
+    const r = await listAlbumPhotos(parse.data.album_id);
+    if ("error" in r) return { ok: false as const, code: "SERVER" as const, message: r.error };
+    return { ok: true as const, photos: r.photos as AlbumPhoto[] };
+  });
+
+export const createAlbum = createServerFn({ method: "POST" })
+  .validator((body: unknown) => AlbumSchema.safeParse(body))
+  .handler(async (args) => {
+    debugAuth("createAlbum", args);
+    const authed = await isAdminFromCtx(args);
+    if (!authed) return await unauth("createAlbum", args);
+    const parse = (args?.data ?? undefined) as ReturnType<typeof AlbumSchema.safeParse> | undefined;
+    if (!parse || !parse.success) return { ok: false as const, code: "VALIDATION" as const, message: "Invalid inputs." };
+    const existing = await listAlbums();
+    const nextSort =
+      "albums" in existing && existing.albums.length
+        ? Math.max(...existing.albums.map((i) => i.sort_order ?? 0)) + 1
+        : 0;
+    const payload = parse.data;
+    const res = await insertAlbum({
+      category: payload.category,
+      title: payload.title,
+      location: payload.location,
+      cover_image_url: payload.cover_image_url,
+      description: payload.description,
+      sort_order: typeof payload.sort_order === "number" ? payload.sort_order : nextSort,
+    });
+    if ("error" in res) return { ok: false as const, code: "SERVER" as const, message: res.error };
+    return { ok: true as const, id: res.id };
+  });
+
+const AlbumPatchSchema = AlbumSchema.partial().extend({ id: z.string().min(1).max(64) });
+
+export const updateAlbumAdmin = createServerFn({ method: "POST" })
+  .validator((body: unknown) => AlbumPatchSchema.safeParse(body))
+  .handler(async (args) => {
+    debugAuth("updateAlbumAdmin", args);
+    const authed = await isAdminFromCtx(args);
+    if (!authed) return await unauth("updateAlbumAdmin", args);
+    const parse = (args?.data ?? undefined) as ReturnType<typeof AlbumPatchSchema.safeParse> | undefined;
+    if (!parse || !parse.success) return { ok: false as const, code: "VALIDATION" as const, message: "Invalid inputs." };
+    const { id, ...rest } = parse.data;
+    const patch: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(rest)) if (v !== undefined) patch[k] = v;
+    const res = await updateAlbum(id, patch as unknown as Parameters<typeof updateAlbum>[1]);
+    if ("error" in res) return { ok: false as const, code: "SERVER" as const, message: res.error };
+    return { ok: true as const };
+  });
+
+export const reorderAlbumsAdmin = createServerFn({ method: "POST" })
+  .validator((body: unknown) => ReorderAlbumsSchema.safeParse(body))
+  .handler(async (args) => {
+    debugAuth("reorderAlbumsAdmin", args);
+    const authed = await isAdminFromCtx(args);
+    if (!authed) return await unauth("reorderAlbumsAdmin", args);
+    const parse = (args?.data ?? undefined) as ReturnType<typeof ReorderAlbumsSchema.safeParse> | undefined;
+    if (!parse || !parse.success) return { ok: false as const, code: "VALIDATION" as const, message: "Invalid payload." };
+    const res = await reorderAlbums(parse.data.ids);
+    if ("error" in res) return { ok: false as const, code: "SERVER" as const, message: res.error };
+    return { ok: true as const };
+  });
+
+export const deleteAlbumAdmin = createServerFn({ method: "POST" })
+  .validator((body: unknown) => IdSchema.safeParse(body))
+  .handler(async (args) => {
+    debugAuth("deleteAlbumAdmin", args);
+    const authed = await isAdminFromCtx(args);
+    if (!authed) return await unauth("deleteAlbumAdmin", args);
+    const parse = (args?.data ?? undefined) as ReturnType<typeof IdSchema.safeParse> | undefined;
+    if (!parse || !parse.success) return { ok: false as const, code: "VALIDATION" as const, message: "Invalid payload." };
+    const id = parse.data.id;
+    const photosRes = await listAlbumPhotos(id);
+    if ("photos" in photosRes) {
+      for (const p of photosRes.photos) {
+        const path = extractStoragePath(p.image_url);
+        if (path) await deleteStorageObject(path);
+      }
+    }
+    const albumRes = await getAlbum(id);
+    if ("album" in albumRes && albumRes.album.cover_image_url) {
+      const coverPath = extractStoragePath(albumRes.album.cover_image_url);
+      if (coverPath) await deleteStorageObject(coverPath);
+    }
+    const res = await deleteAlbum(id);
+    if ("error" in res) return { ok: false as const, code: "SERVER" as const, message: res.error };
+    return { ok: true as const };
+  });
+
+// ---------------- Album Photos CRUD (Admin) ----------------
+
+const AlbumPhotoSchema = z.object({
+  album_id: z.string().min(1).max(64),
+  image_url: z.string().trim().min(1).max(1000),
+  alt: z.string().trim().max(500).default(""),
+  caption: z.string().trim().max(1000).default(""),
+  sort_order: z.number().int().min(0).optional(),
+});
+
+export const addAlbumPhoto = createServerFn({ method: "POST" })
+  .validator((body: unknown) => AlbumPhotoSchema.safeParse(body))
+  .handler(async (args) => {
+    debugAuth("addAlbumPhoto", args);
+    const authed = await isAdminFromCtx(args);
+    if (!authed) return await unauth("addAlbumPhoto", args);
+    const parse = (args?.data ?? undefined) as ReturnType<typeof AlbumPhotoSchema.safeParse> | undefined;
+    if (!parse || !parse.success) return { ok: false as const, code: "VALIDATION" as const, message: "Invalid inputs." };
+    const payload = parse.data;
+    const existing = await listAlbumPhotos(payload.album_id);
+    const nextSort =
+      "photos" in existing && existing.photos.length
+        ? Math.max(...existing.photos.map((i) => i.sort_order ?? 0)) + 1
+        : 0;
+    const res = await insertAlbumPhoto({
+      album_id: payload.album_id,
+      image_url: payload.image_url,
+      alt: payload.alt,
+      caption: payload.caption,
+      sort_order: typeof payload.sort_order === "number" ? payload.sort_order : nextSort,
+    });
+    if ("error" in res) return { ok: false as const, code: "SERVER" as const, message: res.error };
+    return { ok: true as const, id: res.id };
+  });
+
+const PhotoPatchSchema = AlbumPhotoSchema.partial()
+  .extend({ id: z.string().min(1).max(64) })
+  .omit({ album_id: true });
+
+export const updateAlbumPhotoAdmin = createServerFn({ method: "POST" })
+  .validator((body: unknown) => PhotoPatchSchema.safeParse(body))
+  .handler(async (args) => {
+    debugAuth("updateAlbumPhotoAdmin", args);
+    const authed = await isAdminFromCtx(args);
+    if (!authed) return await unauth("updateAlbumPhotoAdmin", args);
+    const parse = (args?.data ?? undefined) as ReturnType<typeof PhotoPatchSchema.safeParse> | undefined;
+    if (!parse || !parse.success) return { ok: false as const, code: "VALIDATION" as const, message: "Invalid inputs." };
+    const { id, ...rest } = parse.data;
+    const patch: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(rest)) if (v !== undefined) patch[k] = v;
+    const res = await updateAlbumPhoto(id, patch as unknown as Parameters<typeof updateAlbumPhoto>[1]);
+    if ("error" in res) return { ok: false as const, code: "SERVER" as const, message: res.error };
+    return { ok: true as const };
+  });
+
+export const reorderAlbumPhotosAdmin = createServerFn({ method: "POST" })
+  .validator((body: unknown) => ReorderPhotosSchema.safeParse(body))
+  .handler(async (args) => {
+    debugAuth("reorderAlbumPhotosAdmin", args);
+    const authed = await isAdminFromCtx(args);
+    if (!authed) return await unauth("reorderAlbumPhotosAdmin", args);
+    const parse = (args?.data ?? undefined) as ReturnType<typeof ReorderPhotosSchema.safeParse> | undefined;
+    if (!parse || !parse.success) return { ok: false as const, code: "VALIDATION" as const, message: "Invalid payload." };
+    const res = await reorderAlbumPhotos(parse.data.ids);
+    if ("error" in res) return { ok: false as const, code: "SERVER" as const, message: res.error };
+    return { ok: true as const };
+  });
+
+export const deleteAlbumPhotoAdmin = createServerFn({ method: "POST" })
+  .validator((body: unknown) => IdSchema.safeParse(body))
+  .handler(async (args) => {
+    debugAuth("deleteAlbumPhotoAdmin", args);
+    const authed = await isAdminFromCtx(args);
+    if (!authed) return await unauth("deleteAlbumPhotoAdmin", args);
+    const parse = (args?.data ?? undefined) as ReturnType<typeof IdSchema.safeParse> | undefined;
+    if (!parse || !parse.success) return { ok: false as const, code: "VALIDATION" as const, message: "Invalid payload." };
+    const id = parse.data.id;
+    const anyClient = getSupabaseServerClient();
+    if (anyClient) {
+      const c = anyClient as unknown as {
+        from(t: string): {
+          select(c: string): {
+            eq(k: string, v: unknown): Promise<{
+              data: { image_url: string }[] | null;
+              error: unknown;
+            }>;
+          };
+        };
+      };
+      try {
+        const { data } = await c
+          .from("album_photos")
+          .select("image_url")
+          .eq("id", id);
+        if (Array.isArray(data) && data[0]) {
+          const path = extractStoragePath(data[0].image_url);
+          if (path) await deleteStorageObject(path);
+        }
+      } catch {
+        /* ignore */
+      }
+    }
+    const res = await deleteAlbumPhoto(id);
+    if ("error" in res) return { ok: false as const, code: "SERVER" as const, message: res.error };
+    return { ok: true as const };
+  });
+
