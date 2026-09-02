@@ -136,10 +136,14 @@ export const getPublicAlbum = createServerFn({ method: "GET" })
     return { success: false as const, error: { issues: [{ message: "Missing album id" }] } };
   })
   .handler(async (args) => {
-    const validated = args?.data as
-      | { success: true; data: string }
-      | { success: false; error: { issues: { message: string }[] } };
-    const id = validated && "success" in validated && validated.success ? validated.data : "";
+    const raw = args?.data as unknown;
+    let id = "";
+    if (typeof raw === "string") {
+      id = raw;
+    } else if (raw && typeof raw === "object" && "success" in raw) {
+      const safe = raw as { success: boolean; data?: string };
+      if (safe.success && typeof safe.data === "string") id = safe.data;
+    }
     const client = getSupabaseServerClient();
     const fallback = FALLBACK_ALBUMS.find((a) => a.id === id) ?? FALLBACK_ALBUMS[0];
     if (!client || !id) {

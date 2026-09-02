@@ -19,8 +19,7 @@ export const Route = createFileRoute("/albums/$albumId")({
     return { title, meta };
   },
   loader: async ({ params }) => {
-    const albumIdArg = params.albumId as unknown as Parameters<typeof getPublicAlbum>[0];
-    const res = await getPublicAlbum(albumIdArg);
+    const res = await getPublicAlbum(params.albumId as unknown as Parameters<typeof getPublicAlbum>[0]);
     const listRes = await listPublicAlbums();
     const siblings = "albums" in listRes ? listRes.albums : [];
     return {
