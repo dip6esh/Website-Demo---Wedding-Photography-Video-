@@ -75,27 +75,53 @@ try {
 
 type SupabaseServerClient = ReturnType<typeof createClient> | null;
 
-let _client: SupabaseServerClient | undefined;
+let _serviceClient: SupabaseServerClient | undefined;
 
 export function getSupabaseServerClient(): SupabaseServerClient {
-  if (_client !== undefined) return _client;
+  if (_serviceClient !== undefined) return _serviceClient;
   const env = getServerEnv();
   const url = readSupabaseUrl(env);
   const key = readSupabaseServiceRoleKey(env);
   if (!url || !key) {
     bootCheck(env);
-    _client = null;
+    _serviceClient = null;
     return null;
   }
   try {
-    _client = createClient(url, key, {
+    _serviceClient = createClient(url, key, {
       auth: { persistSession: false, autoRefreshToken: false },
     });
   } catch (err) {
-    console.error("[supabase-server] Failed to create server client:", err);
-    _client = null;
+    console.error("[supabase-server] Failed to create service-role client:", err);
+    _serviceClient = null;
   }
-  return _client;
+  return _serviceClient;
+}
+
+let _anonClient: SupabaseServerClient | undefined;
+
+export function getSupabaseAnonServerClient(): SupabaseServerClient {
+  if (_anonClient !== undefined) return _anonClient;
+  const env = getServerEnv();
+  const url = readSupabaseUrl(env);
+  const key = readSupabaseAnonKey(env);
+  if (!url || !key) {
+    _anonClient = null;
+    return null;
+  }
+  try {
+    _anonClient = createClient(url, key, {
+      auth: { persistSession: false, autoRefreshToken: false },
+    });
+  } catch (err) {
+    console.error("[supabase-server] Failed to create anon server client:", err);
+    _anonClient = null;
+  }
+  return _anonClient;
+}
+
+function getSupabaseReadClient(): SupabaseServerClient {
+  return getSupabaseServerClient() ?? getSupabaseAnonServerClient();
 }
 
 export type ContactInquiryInsert = {
@@ -299,12 +325,12 @@ export async function updatePortfolioItem(
     };
   };
   const clean: Record<string, unknown> = {};
-  if (patch.category !== undefined) clean.category = patch.category;
-  if (patch.title !== undefined) clean.title = patch.title;
-  if (patch.location !== undefined) clean.location = patch.location;
-  if (patch.image_url !== undefined) clean.image_url = patch.image_url;
-  if (patch.alt !== undefined) clean.alt = patch.alt;
-  if (patch.sort_order !== undefined) clean.sort_order = patch.sort_order;
+  if (patch.category !== undefined) clean["category"] = patch.category;
+  if (patch.title !== undefined) clean["title"] = patch.title;
+  if (patch.location !== undefined) clean["location"] = patch.location;
+  if (patch.image_url !== undefined) clean["image_url"] = patch.image_url;
+  if (patch.alt !== undefined) clean["alt"] = patch.alt;
+  if (patch.sort_order !== undefined) clean["sort_order"] = patch.sort_order;
   const { error } = await anyClient.from("portfolio_items").update(clean).eq("id", id);
   if (error) {
     console.error("[supabase] updatePortfolioItem failed:", error);
@@ -486,7 +512,7 @@ export type AlbumPhotoInput = {
 export async function listAlbums(): Promise<
   { albums: Album[] } | { error: string }
 > {
-  const client = getSupabaseServerClient();
+  const client = getSupabaseReadClient();
   const cfgErr = notConfiguredCheck(client);
   if (cfgErr) return cfgErr;
   const anyClient = client as unknown as {
@@ -516,7 +542,7 @@ export async function listAlbums(): Promise<
 export async function getAlbum(
   id: string,
 ): Promise<{ album: Album } | { error: string }> {
-  const client = getSupabaseServerClient();
+  const client = getSupabaseReadClient();
   const cfgErr = notConfiguredCheck(client);
   if (cfgErr) return cfgErr;
   const anyClient = client as unknown as {
@@ -537,7 +563,7 @@ export async function getAlbum(
     .eq("id", id)
     .maybeSingle();
   if (error) {
-    console.error("[supabase] getAlbum failed:", error);
+    console.error("[supabase] getAlbum failed:", error, "for id:", id);
     return { error: error.message || "Failed to load album." };
   }
   if (!data) return { error: "Album not found." };
@@ -608,12 +634,12 @@ export async function updateAlbum(
     };
   };
   const clean: Record<string, unknown> = {};
-  if (patch.category !== undefined) clean.category = patch.category;
-  if (patch.title !== undefined) clean.title = patch.title;
-  if (patch.location !== undefined) clean.location = patch.location;
-  if (patch.cover_image_url !== undefined) clean.cover_image_url = patch.cover_image_url;
-  if (patch.description !== undefined) clean.description = patch.description;
-  if (patch.sort_order !== undefined) clean.sort_order = patch.sort_order;
+  if (patch.category !== undefined) clean["category"] = patch.category;
+  if (patch.title !== undefined) clean["title"] = patch.title;
+  if (patch.location !== undefined) clean["location"] = patch.location;
+  if (patch.cover_image_url !== undefined) clean["cover_image_url"] = patch.cover_image_url;
+  if (patch.description !== undefined) clean["description"] = patch.description;
+  if (patch.sort_order !== undefined) clean["sort_order"] = patch.sort_order;
   const { error } = await anyClient.from("albums").update(clean).eq("id", id);
   if (error) {
     console.error("[supabase] updateAlbum failed:", error);
@@ -675,7 +701,7 @@ export async function deleteAlbum(
 export async function listAlbumPhotos(
   albumId: string,
 ): Promise<{ photos: AlbumPhoto[] } | { error: string }> {
-  const client = getSupabaseServerClient();
+  const client = getSupabaseReadClient();
   const cfgErr = notConfiguredCheck(client);
   if (cfgErr) return cfgErr;
   const anyClient = client as unknown as {
@@ -699,7 +725,7 @@ export async function listAlbumPhotos(
     .order("sort_order", { ascending: true, nullsFirst: false })
     .order("created_at", { ascending: true });
   if (error) {
-    console.error("[supabase] listAlbumPhotos failed:", error);
+    console.error("[supabase] listAlbumPhotos failed:", error, "for albumId:", albumId);
     return { error: error.message || "Failed to load photos." };
   }
   return { photos: data ?? [] };
@@ -767,10 +793,10 @@ export async function updateAlbumPhoto(
     };
   };
   const clean: Record<string, unknown> = {};
-  if (patch.image_url !== undefined) clean.image_url = patch.image_url;
-  if (patch.alt !== undefined) clean.alt = patch.alt;
-  if (patch.caption !== undefined) clean.caption = patch.caption;
-  if (patch.sort_order !== undefined) clean.sort_order = patch.sort_order;
+  if (patch.image_url !== undefined) clean["image_url"] = patch.image_url;
+  if (patch.alt !== undefined) clean["alt"] = patch.alt;
+  if (patch.caption !== undefined) clean["caption"] = patch.caption;
+  if (patch.sort_order !== undefined) clean["sort_order"] = patch.sort_order;
   const { error } = await anyClient.from("album_photos").update(clean).eq("id", id);
   if (error) {
     console.error("[supabase] updateAlbumPhoto failed:", error);

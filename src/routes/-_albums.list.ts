@@ -9,9 +9,14 @@ import { categories, portfolio as fallbackPortfolio } from "../lib/site-content"
 import {
   getAlbum,
   getSupabaseServerClient,
+  getSupabaseAnonServerClient,
   listAlbumPhotos,
   listAlbums,
 } from "../lib/supabase-server";
+
+function getSupabaseReadClient() {
+  return getSupabaseServerClient() ?? getSupabaseAnonServerClient();
+}
 
 export type PublicAlbum = {
   id: string;
@@ -89,7 +94,7 @@ const FALLBACK_ALBUMS: FallbackAlbum[] = fallbackPortfolio.map((item, index) => 
 });
 
 export const listPublicAlbums = createServerFn({ method: "GET" }).handler(async () => {
-  const client = getSupabaseServerClient();
+  const client = getSupabaseReadClient();
   if (!client) {
     return { ok: true as const, albums: FALLBACK_ALBUMS, source: "fallback" as const };
   }
@@ -112,6 +117,15 @@ export const listPublicAlbums = createServerFn({ method: "GET" }).handler(async 
       for (const row of allPhotosRes.data) {
         const albumId = row.album_id;
         counts.set(albumId, (counts.get(albumId) ?? 0) + 1);
+      }
+    } else {
+      for (const a of albumsRes.albums) {
+        try {
+          const ph = await listAlbumPhotos(a.id);
+          counts.set(a.id, "photos" in ph ? ph.photos.length : 0);
+        } catch {
+          counts.set(a.id, 0);
+        }
       }
     }
     const out: PublicAlbum[] = albumsRes.albums.map((a) => ({
@@ -173,7 +187,7 @@ export const getPublicAlbum = createServerFn({ method: "GET" })
     const rawData = data;
     const id = extractStringId(data);
     console.warn("[getPublicAlbum] raw data shape:", typeof rawData, "-> extracted id:", JSON.stringify(id));
-    const client = getSupabaseServerClient();
+    const client = getSupabaseReadClient();
     const matchedFallback = id ? FALLBACK_ALBUMS.find((a) => a.id === id) : undefined;
     if (!client || !id) {
       if (matchedFallback) return { ok: true as const, found: true as const, album: matchedFallback, source: "fallback" as const, debug: { id, hasClient: !!client } };
@@ -206,7 +220,7 @@ export const getPublicAlbum = createServerFn({ method: "GET" })
         photo_count: photos.length,
         photos,
       };
-      return { ok: true as const, found: true as const, album, source: "database" as const, debug: { id, hasClient: true } };
+      return { ok: true as const, found: true as const, album, source: "database" as const, debug: { id, hasClient: true, photoCount: photos.length } };
     } catch (err) {
       console.warn("[album] Falling back to static:", err, "for id:", id);
       if (matchedFallback) return { ok: true as const, found: true as const, album: matchedFallback, source: "fallback" as const, debug: { id, hasClient: true } };

@@ -1,7 +1,14 @@
 import { createFileRoute, Link, notFound, useRouter } from "@tanstack/react-router";
 import { ArrowLeft, ChevronLeft, ChevronRight, X } from "lucide-react";
 import { useEffect, useState } from "react";
-import { getPublicAlbum, listPublicAlbums, type PublicAlbum } from "./-_albums.list";
+import { getPublicAlbum, listPublicAlbums, type PublicAlbum, type PublicAlbumPhoto } from "./-_albums.list";
+import { listAlbumPhotos } from "../lib/supabase-server";
+
+function normalizeSeedUrl(raw: string): string {
+  if (!raw) return "";
+  if (!/^\/assets\//.test(raw)) return raw;
+  return raw;
+}
 
 export const Route = createFileRoute("/albums/$albumId")({
   head: (ctx) => {
@@ -39,6 +46,31 @@ export const Route = createFileRoute("/albums/$albumId")({
       album = res.album;
       source = res.source;
     } else if (siblingMatch) {
+      let realPhotos: PublicAlbumPhoto[] = siblingMatch.photos ?? [];
+      try {
+        const phRes = await listAlbumPhotos(params.albumId);
+        if ("photos" in phRes && Array.isArray(phRes.photos)) {
+          realPhotos = phRes.photos.map((p) => ({
+            id: p.id,
+            image: normalizeSeedUrl((p as unknown as { image_url: string }).image_url),
+            alt: (p as unknown as { alt?: string; caption?: string }).alt || (p as unknown as { alt?: string; caption?: string }).caption || siblingMatch.title,
+            caption: (p as unknown as { caption?: string }).caption || "",
+          }));
+          console.warn("[albums.$albumId loader] sibling fallback loaded", realPhotos.length, "real photos for", siblingMatch.title);
+        }
+      } catch (e) {
+        console.warn("[albums.$albumId loader] sibling fallback photo load failed:", e);
+      }
+      if (realPhotos.length === 0) {
+        realPhotos = [
+          {
+            id: `${siblingMatch.id}-cover`,
+            image: siblingMatch.cover_image,
+            alt: siblingMatch.title,
+            caption: "",
+          },
+        ];
+      }
       album = {
         id: siblingMatch.id,
         category: siblingMatch.category,
@@ -46,15 +78,8 @@ export const Route = createFileRoute("/albums/$albumId")({
         location: siblingMatch.location,
         cover_image: siblingMatch.cover_image,
         description: siblingMatch.description,
-        photo_count: siblingMatch.photo_count,
-        photos: siblingMatch.photos ?? [
-          {
-            id: `${siblingMatch.id}-cover`,
-            image: siblingMatch.cover_image,
-            alt: siblingMatch.title,
-            caption: "",
-          },
-        ],
+        photo_count: realPhotos.length,
+        photos: realPhotos,
       };
       source = res.source;
       console.warn("[albums.$albumId loader] Using sibling fallback for", params.albumId, "=", siblingMatch.title);
