@@ -1,5 +1,5 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 
 import { categories, films } from "@/lib/site-content";
 import { listPublicAlbums, type PublicAlbum } from "./-_albums.list";
@@ -106,22 +106,9 @@ export const Route = createFileRoute("/works")({
 });
 
 function WorksPage() {
-  const initial = Route.useLoaderData().albums;
-  const [items, setItems] = useState<PublicAlbum[]>(initial);
+  const { albums: items } = Route.useLoaderData();
   const [category, setCategory] = useState<(typeof categories)[number]>("All");
   const [activeFilm, setActiveFilm] = useState<string | null>(null);
-
-  useEffect(() => {
-    let mounted = true;
-    void listPublicAlbums().then((res) => {
-      if (mounted && res.ok && res.albums.length) {
-        setItems(res.albums);
-      }
-    });
-    return () => {
-      mounted = false;
-    };
-  }, []);
 
   const filtered = useMemo(
     () => (category === "All" ? items : items.filter((a) => a.category === category)),

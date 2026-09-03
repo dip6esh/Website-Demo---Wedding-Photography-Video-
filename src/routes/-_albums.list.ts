@@ -1,4 +1,5 @@
 import { createServerFn } from "@tanstack/react-start";
+import { z } from "zod";
 import weddingHero from "@/assets/wedding-hero.jpg";
 import preweddingDusk from "@/assets/prewedding-dusk.jpg";
 import ringsDetail from "@/assets/rings-detail.jpg";
@@ -17,6 +18,8 @@ import {
 function getSupabaseReadClient() {
   return getSupabaseServerClient() ?? getSupabaseAnonServerClient();
 }
+
+const AlbumIdParamSchema = z.string().min(1).max(128);
 
 export type PublicAlbum = {
   id: string;
@@ -119,14 +122,16 @@ export const listPublicAlbums = createServerFn({ method: "GET" }).handler(async 
         counts.set(albumId, (counts.get(albumId) ?? 0) + 1);
       }
     } else {
-      for (const a of albumsRes.albums) {
-        try {
-          const ph = await listAlbumPhotos(a.id);
-          counts.set(a.id, "photos" in ph ? ph.photos.length : 0);
-        } catch {
-          counts.set(a.id, 0);
-        }
-      }
+      await Promise.all(
+        albumsRes.albums.map(async (a) => {
+          try {
+            const ph = await listAlbumPhotos(a.id);
+            counts.set(a.id, "photos" in ph ? ph.photos.length : 0);
+          } catch {
+            counts.set(a.id, 0);
+          }
+        }),
+      );
     }
     const out: PublicAlbum[] = albumsRes.albums.map((a) => ({
       id: a.id,
@@ -182,11 +187,38 @@ function extractStringId(data: unknown): string {
   return "";
 }
 
+export const listPublicAlbumPhotos = createServerFn({ method: "GET" })
+  .validator((body: unknown) => AlbumIdParamSchema.safeParse(body))
+  .handler(async (args) => {
+    const parse = (args?.data ?? undefined) as ReturnType<typeof AlbumIdParamSchema.safeParse> | undefined;
+    const id = parse?.success ? parse.data : extractStringId(args?.data as unknown);
+    const client = getSupabaseReadClient();
+    if (!client || !id) {
+      return { ok: true as const, photos: [], source: "fallback" as const };
+    }
+    try {
+      const photosRes = await listAlbumPhotos(id);
+      const photos: PublicAlbumPhoto[] = "photos" in photosRes
+        ? photosRes.photos.map((p) => ({
+            id: p.id,
+            image: normalizeSeedUrl(p.image_url),
+            alt: p.alt || p.caption || "",
+            caption: p.caption,
+          }))
+        : [];
+      return { ok: true as const, photos, source: "database" as const };
+    } catch (err) {
+      console.warn("[listPublicAlbumPhotos] Falling back to empty:", err, "for id:", id);
+      return { ok: true as const, photos: [], source: "fallback" as const };
+    }
+  });
+
 export const getPublicAlbum = createServerFn({ method: "GET" })
-  .handler(async ({ data }) => {
-    const rawData = data;
-    const id = extractStringId(data);
-    console.warn("[getPublicAlbum] raw data shape:", typeof rawData, "-> extracted id:", JSON.stringify(id));
+  .validator((body: unknown) => AlbumIdParamSchema.safeParse(body))
+  .handler(async (args) => {
+    const parse = (args?.data ?? undefined) as ReturnType<typeof AlbumIdParamSchema.safeParse> | undefined;
+    const id = parse?.success ? parse.data : extractStringId(args?.data as unknown);
+    console.debug("[getPublicAlbum] extracted id:", JSON.stringify(id));
     const client = getSupabaseReadClient();
     const matchedFallback = id ? FALLBACK_ALBUMS.find((a) => a.id === id) : undefined;
     if (!client || !id) {
@@ -222,7 +254,7 @@ export const getPublicAlbum = createServerFn({ method: "GET" })
       };
       return { ok: true as const, found: true as const, album, source: "database" as const, debug: { id, hasClient: true, photoCount: photos.length } };
     } catch (err) {
-      console.warn("[album] Falling back to static:", err, "for id:", id);
+      console.debug("[getPublicAlbum] Using static fallback for id:", id, "reason:", err instanceof Error ? err.message : String(err));
       if (matchedFallback) return { ok: true as const, found: true as const, album: matchedFallback, source: "fallback" as const, debug: { id, hasClient: true } };
       return { ok: true as const, found: false as const, album: null, source: "fallback" as const, debug: { id, hasClient: true, why: "exception", errorMsg: err instanceof Error ? err.message : String(err) } };
     }

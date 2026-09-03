@@ -1,14 +1,15 @@
 import { createFileRoute, Link, notFound, useRouter } from "@tanstack/react-router";
 import { ArrowLeft, ChevronLeft, ChevronRight, X } from "lucide-react";
 import { useEffect, useState } from "react";
-import { getPublicAlbum, listPublicAlbums, type PublicAlbum, type PublicAlbumPhoto } from "./-_albums.list";
-import { listAlbumPhotos } from "../lib/supabase-server";
+import { getPublicAlbum, listPublicAlbumPhotos, listPublicAlbums, type PublicAlbum, type PublicAlbumPhoto } from "./-_albums.list";
 
-function normalizeSeedUrl(raw: string): string {
-  if (!raw) return "";
-  if (!/^\/assets\//.test(raw)) return raw;
-  return raw;
-}
+type LoaderAlbum = PublicAlbum;
+type LoaderPhoto = PublicAlbumPhoto;
+type LoaderData = {
+  album: LoaderAlbum;
+  siblings: LoaderAlbum[];
+  source: "fallback" | "database";
+};
 
 export const Route = createFileRoute("/albums/$albumId")({
   head: (ctx) => {
@@ -30,14 +31,12 @@ export const Route = createFileRoute("/albums/$albumId")({
     const siblings: PublicAlbum[] = "albums" in listRes ? listRes.albums : [];
     const siblingMatch = siblings.find((a) => a.id === params.albumId);
 
-    const typedGetPublicAlbum = getPublicAlbum as (id: string) => ReturnType<typeof getPublicAlbum>;
-    const res = await typedGetPublicAlbum(params.albumId);
-    console.warn("[albums.$albumId loader] getPublicAlbum result:", {
+    const res = await getPublicAlbum({ data: params.albumId });
+    console.debug("[albums.$albumId loader] getPublicAlbum result:", {
       found: res.found,
       source: res.source,
       id: params.albumId,
       siblingMatchTitle: siblingMatch?.title,
-      debug: (res as unknown as { debug?: unknown }).debug,
     });
 
     let album: PublicAlbum;
@@ -48,15 +47,10 @@ export const Route = createFileRoute("/albums/$albumId")({
     } else if (siblingMatch) {
       let realPhotos: PublicAlbumPhoto[] = siblingMatch.photos ?? [];
       try {
-        const phRes = await listAlbumPhotos(params.albumId);
-        if ("photos" in phRes && Array.isArray(phRes.photos)) {
-          realPhotos = phRes.photos.map((p) => ({
-            id: p.id,
-            image: normalizeSeedUrl((p as unknown as { image_url: string }).image_url),
-            alt: (p as unknown as { alt?: string; caption?: string }).alt || (p as unknown as { alt?: string; caption?: string }).caption || siblingMatch.title,
-            caption: (p as unknown as { caption?: string }).caption || "",
-          }));
-          console.warn("[albums.$albumId loader] sibling fallback loaded", realPhotos.length, "real photos for", siblingMatch.title);
+        const phRes = await listPublicAlbumPhotos({ data: params.albumId });
+        if ("ok" in phRes && Array.isArray(phRes.photos) && phRes.photos.length > 0) {
+          realPhotos = phRes.photos;
+          console.debug("[albums.$albumId loader] sibling fallback loaded", realPhotos.length, "real photos for", siblingMatch.title);
         }
       } catch (e) {
         console.warn("[albums.$albumId loader] sibling fallback photo load failed:", e);
@@ -82,7 +76,7 @@ export const Route = createFileRoute("/albums/$albumId")({
         photos: realPhotos,
       };
       source = res.source;
-      console.warn("[albums.$albumId loader] Using sibling fallback for", params.albumId, "=", siblingMatch.title);
+      console.debug("[albums.$albumId loader] Using sibling fallback for", params.albumId, "=", siblingMatch.title);
     } else {
       console.warn("[albums.$albumId loader] Album truly missing, throwing 404 for:", params.albumId);
       throw notFound();
@@ -118,30 +112,8 @@ export const Route = createFileRoute("/albums/$albumId")({
   },
 });
 
-type LoaderAlbum = {
-  id: string;
-  category: string;
-  title: string;
-  location: string;
-  cover_image: string;
-  description: string;
-  photo_count: number;
-  photos?: LoaderPhoto[];
-};
-type LoaderPhoto = {
-  id: string;
-  image: string;
-  alt: string;
-  caption: string;
-};
-type LoaderData = {
-  album: LoaderAlbum;
-  siblings: LoaderAlbum[];
-  source: "fallback" | "database";
-};
-
 function AlbumDetailPage() {
-  const loader = Route.useLoaderData() as unknown as LoaderData;
+  const loader = Route.useLoaderData() as LoaderData;
   const album = loader.album;
   const siblings = loader.siblings;
   const photos = album.photos ?? [];
@@ -160,6 +132,15 @@ function AlbumDetailPage() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [activeIndex, photos.length]);
+
+  useEffect(() => {
+    if (activeIndex === null) return;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = prev;
+    };
+  }, [activeIndex]);
 
   const nextAlbum = (() => {
     const idx = siblings.findIndex((a: LoaderAlbum) => a.id === album.id);
@@ -267,7 +248,7 @@ function AlbumDetailPage() {
       {/* Prev / Next album navigation */}
       {(prevAlbum || nextAlbum) && photos.length ? (
         <section className="border-t border-foreground/10 bg-card/40">
-          <div className="mx-auto max-w-6xl px-5 py-10 grid gap-4 md:grid-cols-2">
+          <div className={`mx-auto max-w-6xl px-5 py-10 grid gap-4 ${prevAlbum && nextAlbum ? "md:grid-cols-2" : "md:grid-cols-1 md:max-w-2xl"}`}>
             {prevAlbum ? (
               <Link
                 to="/albums/$albumId"
@@ -297,9 +278,7 @@ function AlbumDetailPage() {
                   </div>
                 </div>
               </Link>
-            ) : (
-              <div />
-            )}
+            ) : null}
             {nextAlbum ? (
               <Link
                 to="/albums/$albumId"
