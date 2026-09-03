@@ -27,11 +27,12 @@ export const Route = createFileRoute("/albums/$albumId")({
     return { title, meta };
   },
   loader: async ({ params }) => {
-    const listRes = await listPublicAlbums();
+    const [listRes, res] = await Promise.all([
+      listPublicAlbums(),
+      getPublicAlbum({ data: params.albumId }),
+    ]);
     const siblings: PublicAlbum[] = "albums" in listRes ? listRes.albums : [];
     const siblingMatch = siblings.find((a) => a.id === params.albumId);
-
-    const res = await getPublicAlbum({ data: params.albumId });
     console.debug("[albums.$albumId loader] getPublicAlbum result:", {
       found: res.found,
       source: res.source,
