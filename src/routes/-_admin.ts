@@ -15,6 +15,7 @@ import {
   insertPortfolioItem,
   listAlbumPhotos,
   listAlbums,
+  listContactInquiries,
   listPortfolioItems,
   PortfolioItem,
   PortfolioItemInput,
@@ -26,10 +27,12 @@ import {
   reorderPortfolioItems,
   updateAlbum,
   updateAlbumPhoto,
+  updateContactInquiryStatus,
   updatePortfolioItem,
   uploadPortfolioImage,
   type Album,
   type AlbumPhoto,
+  type ContactInquiry,
 } from "../lib/supabase-server";
 import {
   AdminSession,
@@ -997,6 +1000,49 @@ export const deleteAlbumPhotoAdmin = createServerFn({ method: "POST" })
       }
     }
     const res = await deleteAlbumPhoto(id);
+    if ("error" in res) return { ok: false as const, code: "SERVER" as const, message: res.error };
+    return { ok: true as const };
+  });
+
+// ---------------- Enquiries CRUD (Admin) ----------------
+
+const STANDARD_ENQUIRY_STATUSES = ["new", "contacted", "archived"] as const;
+
+const ListEnquiriesSchema = z.object({
+  status: z.string().trim().min(1).max(40).optional(),
+  service: z.string().trim().min(1).max(120).optional(),
+});
+
+const UpdateEnquiryStatusSchema = z.object({
+  id: z.string().min(1).max(64),
+  status: z.enum(STANDARD_ENQUIRY_STATUSES).or(z.string().trim().min(1).max(40)),
+});
+
+export const listEnquiriesAdmin = createServerFn({ method: "POST" })
+  .validator((body: unknown) => ListEnquiriesSchema.safeParse(body))
+  .handler(async (args) => {
+    debugAuth("listEnquiriesAdmin", args);
+    const authed = await isAdminFromCtx(args);
+    if (!authed) return await unauth("listEnquiriesAdmin", args);
+    const parse = (args?.data ?? undefined) as ReturnType<typeof ListEnquiriesSchema.safeParse> | undefined;
+    if (!parse || !parse.success) return { ok: false as const, code: "VALIDATION" as const, message: "Invalid filter payload." };
+    const filters: { status?: string; service?: string } = {};
+    if (parse.data.status && parse.data.status.length > 0) filters.status = parse.data.status;
+    if (parse.data.service && parse.data.service.length > 0) filters.service = parse.data.service;
+    const result = await listContactInquiries(filters);
+    if ("error" in result) return { ok: false as const, code: "SERVER" as const, message: result.error };
+    return { ok: true as const, inquiries: result.inquiries as ContactInquiry[] };
+  });
+
+export const updateEnquiryStatusAdmin = createServerFn({ method: "POST" })
+  .validator((body: unknown) => UpdateEnquiryStatusSchema.safeParse(body))
+  .handler(async (args) => {
+    debugAuth("updateEnquiryStatusAdmin", args);
+    const authed = await isAdminFromCtx(args);
+    if (!authed) return await unauth("updateEnquiryStatusAdmin", args);
+    const parse = (args?.data ?? undefined) as ReturnType<typeof UpdateEnquiryStatusSchema.safeParse> | undefined;
+    if (!parse || !parse.success) return { ok: false as const, code: "VALIDATION" as const, message: "Invalid enquiry status payload." };
+    const res = await updateContactInquiryStatus(parse.data.id, parse.data.status);
     if ("error" in res) return { ok: false as const, code: "SERVER" as const, message: res.error };
     return { ok: true as const };
   });

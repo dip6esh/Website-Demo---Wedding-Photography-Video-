@@ -1,19 +1,29 @@
 import { createFileRoute, useRouter } from "@tanstack/react-router";
 import {
   Album as AlbumIcon,
+  Archive,
   ArrowBigDown,
   ArrowBigUp,
   BookOpen,
+  CalendarDays,
   Check,
+  CheckCircle2,
   ChevronDown,
   ChevronUp,
+  Filter,
   GripVertical,
   Image as ImageIcon,
   ImagePlus,
+  Inbox,
   Loader2,
   LogOut,
+  Mail,
+  MapPin,
+  MessageSquare,
   Pencil,
+  Phone,
   Plus,
+  RefreshCw,
   Save,
   ShieldCheck,
   Star,
@@ -22,7 +32,7 @@ import {
   X,
 } from "lucide-react";
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
-import { categories } from "@/lib/site-content";
+import { categories, services } from "@/lib/site-content";
 import {
   addAlbumPhoto,
   adminLogin,
@@ -33,11 +43,13 @@ import {
   deleteAlbumAdmin,
   deleteAlbumPhotoAdmin,
   listAlbumsAdmin,
+  listEnquiriesAdmin,
   listPhotosForAlbum,
   reorderAlbumPhotosAdmin,
   reorderAlbumsAdmin,
   updateAlbumAdmin,
   updateAlbumPhotoAdmin,
+  updateEnquiryStatusAdmin,
   uploadPortfolioImageFn,
 } from "./-_admin";
 
@@ -76,6 +88,24 @@ type PhotoRow = {
   created_at: string;
   updated_at: string;
 };
+
+type EnquiryRow = {
+  id: string;
+  name: string;
+  phone: string;
+  email: string;
+  service: string;
+  event_date: string;
+  location: string;
+  message: string;
+  source: string | null;
+  ip_address: string | null;
+  status: string;
+  created_at: string;
+  updated_at: string;
+};
+
+type AdminTab = "albums" | "enquiries";
 
 function AdminRoute() {
   const [authed, setAuthed] = useState<boolean | "loading">("loading");
@@ -264,6 +294,7 @@ function LoginScreen({ onLoggedIn }: { onLoggedIn: () => void }) {
 // --------------------------- ADMIN SCREEN ---------------------------
 
 function AdminScreen({ onLoggedOut }: { onLoggedOut: () => void }) {
+  const [activeTab, setActiveTab] = useState<AdminTab>("albums");
   const [albums, setAlbums] = useState<AlbumRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | undefined>();
@@ -273,6 +304,13 @@ function AdminScreen({ onLoggedOut }: { onLoggedOut: () => void }) {
   const [creating, setCreating] = useState(false);
   const [saving, setSaving] = useState(false);
   const [reorderDirty, setReorderDirty] = useState(false);
+  const [enquiries, setEnquiries] = useState<EnquiryRow[]>([]);
+  const [enquiriesLoading, setEnquiriesLoading] = useState(true);
+  const [enquiriesError, setEnquiriesError] = useState<string | undefined>();
+  const [statusFilter, setStatusFilter] = useState<string>("");
+  const [serviceFilter, setServiceFilter] = useState<string>("");
+  const [expandedEnquiryId, setExpandedEnquiryId] = useState<string | null>(null);
+  const [enquiryBusyId, setEnquiryBusyId] = useState<string | null>(null);
   const router = useRouter();
 
   async function reload(silent = false) {
@@ -287,9 +325,30 @@ function AdminScreen({ onLoggedOut }: { onLoggedOut: () => void }) {
     }
   }
 
+  async function reloadEnquiries(silent = false) {
+    if (!silent) setEnquiriesLoading(true);
+    setEnquiriesError(undefined);
+    const payload: { status?: string; service?: string } = {};
+    if (statusFilter) payload.status = statusFilter;
+    if (serviceFilter) payload.service = serviceFilter;
+    const r = await listEnquiriesAdmin({ data: payload });
+    if (!silent) setEnquiriesLoading(false);
+    if ("inquiries" in r) {
+      setEnquiries(r.inquiries as unknown as EnquiryRow[]);
+    } else if ("ok" in r && r.ok === false) {
+      setEnquiriesError((r as { message?: string }).message ?? "Could not load enquiries.");
+    } else {
+      setEnquiriesError("Could not load enquiries.");
+    }
+  }
+
   useEffect(() => {
     void reload();
   }, []);
+
+  useEffect(() => {
+    void reloadEnquiries();
+  }, [statusFilter, serviceFilter]);
 
   function toastBanner(kind: "ok" | "err", text: string) {
     setBanner({ kind, text });
@@ -354,7 +413,9 @@ function AdminScreen({ onLoggedOut }: { onLoggedOut: () => void }) {
             </span>
             <div>
               <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-foreground/55">Admin · Vessel Studio</p>
-              <h1 className="font-display text-lg font-semibold">Albums manager</h1>
+              <h1 className="font-display text-lg font-semibold">
+                {activeTab === "albums" ? "Albums manager" : "Enquiries inbox"}
+              </h1>
             </div>
           </div>
           <div className="flex items-center gap-2">
@@ -382,6 +443,38 @@ function AdminScreen({ onLoggedOut }: { onLoggedOut: () => void }) {
         </div>
       </header>
 
+      <div className="border-b border-foreground/10 bg-background/60">
+        <div className="mx-auto max-w-7xl px-5">
+          <div className="flex items-center gap-1">
+            {(
+              [
+                { id: "albums", label: "Albums", icon: AlbumIcon, hint: "Portfolio projects" },
+                { id: "enquiries", label: "Enquiries", icon: Inbox, hint: "Visitor submissions" },
+              ] as const
+            ).map((t) => {
+              const Icon = t.icon;
+              const active = activeTab === t.id;
+              return (
+                <button
+                  key={t.id}
+                  type="button"
+                  onClick={() => setActiveTab(t.id)}
+                  className={`group relative inline-flex items-center gap-2 px-4 py-3 text-sm font-medium transition-colors ${
+                    active ? "text-primary" : "text-foreground/55 hover:text-foreground/85"
+                  }`}
+                >
+                  <Icon size={14} />
+                  <span>{t.label}</span>
+                  {active ? (
+                    <span className="absolute inset-x-2 -bottom-px h-[2px] rounded-full bg-primary" />
+                  ) : null}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+
       {banner ? (
         <div
           className={`mx-auto max-w-7xl px-5 pt-5 ${
@@ -400,130 +493,173 @@ function AdminScreen({ onLoggedOut }: { onLoggedOut: () => void }) {
         </div>
       ) : null}
 
-      <section className="mx-auto max-w-7xl px-5 py-8 md:py-10">
-        <div className="flex flex-wrap items-end justify-between gap-4 mb-6">
-          <div>
-            <h2 className="font-display text-2xl font-semibold md:text-3xl">Albums</h2>
-            <p className="mt-1 text-sm text-foreground/60 max-w-[56ch]">
-              Create an album per project (e.g. &ldquo;Ankit and Urvi&rdquo;) under a service category, then add multiple photos,
-              a cover image, and a brief description. Visitors click albums on /works to see the full gallery.
-            </p>
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
-            {reorderDirty ? (
+      {activeTab === "albums" ? (
+        <section className="mx-auto max-w-7xl px-5 py-8 md:py-10">
+          <div className="flex flex-wrap items-end justify-between gap-4 mb-6">
+            <div>
+              <h2 className="font-display text-2xl font-semibold md:text-3xl">Albums</h2>
+              <p className="mt-1 text-sm text-foreground/60 max-w-[56ch]">
+                Create an album per project (e.g. &ldquo;Ankit and Urvi&rdquo;) under a service category, then add multiple photos,
+                a cover image, and a brief description. Visitors click albums on /works to see the full gallery.
+              </p>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              {reorderDirty ? (
+                <button
+                  type="button"
+                  onClick={saveOrder}
+                  disabled={saving}
+                  className="inline-flex items-center gap-2 rounded-full bg-primary px-4 py-2 text-sm font-medium text-primary-foreground ring-1 ring-primary/30 disabled:opacity-60"
+                >
+                  <Save size={14} /> {saving ? "Saving order..." : "Save order"}
+                </button>
+              ) : null}
               <button
                 type="button"
-                onClick={saveOrder}
-                disabled={saving}
-                className="inline-flex items-center gap-2 rounded-full bg-primary px-4 py-2 text-sm font-medium text-primary-foreground ring-1 ring-primary/30 disabled:opacity-60"
-              >
-                <Save size={14} /> {saving ? "Saving order..." : "Save order"}
-              </button>
-            ) : null}
-            <button
-              type="button"
-              onClick={() => {
-                setExpandedAlbumId(null);
-                setEditingAlbumId(null);
-                setCreating(true);
-              }}
-              className="inline-flex items-center gap-2 rounded-full bg-foreground px-4 py-2 text-sm font-medium text-background hover:-translate-y-0.5 transition-transform active:translate-y-0"
-            >
-              <Plus size={14} /> New album
-            </button>
-          </div>
-        </div>
-
-        {loadError ? (
-          <div className="rounded-xl border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm text-destructive">
-            {loadError}
-          </div>
-        ) : null}
-
-        {loading ? (
-          <div className="rounded-xl bg-card p-10 ring-1 ring-foreground/10 text-center">
-          <Loader2 size={20} className="mx-auto animate-spin text-primary" />
-          <p className="mt-3 text-sm text-foreground/60">Loading albums…</p>
-        </div>
-        ) : albums.length === 0 && !creating ? (
-          <EmptyAlbumsState onAdd={() => setCreating(true)} />
-        ) : null}
-
-        {!loading && albums.length ? (
-          <div className="space-y-4">
-            {albums.map((album, index) => (
-              <AlbumCard
-                key={album.id}
-                album={album}
-                index={index}
-                total={albums.length}
-                expanded={expandedAlbumId === album.id}
-                editing={editingAlbumId === album.id}
-                saving={saving}
-                onToggleExpand={() =>
-                  setExpandedAlbumId((cur) => (cur === album.id ? null : album.id))
-                }
-                onEdit={() => {
-                  setCreating(false);
-                  setExpandedAlbumId(album.id);
-                  setEditingAlbumId((cur) => (cur === album.id ? null : album.id));
+                onClick={() => {
+                  setExpandedAlbumId(null);
+                  setEditingAlbumId(null);
+                  setCreating(true);
                 }}
-                onMoveUp={() => move(index, -1)}
-                onMoveDown={() => move(index, 1)}
-                onSave={(patch) =>
-                  handleAlbumSave(album.id, patch, (t) => toastBanner(t.kind, t.text))
-                }
-                onDelete={() => removeAlbum(album.id)}
-                onSavedReload={() => reload(true)}
-                onSetCover={(photoId, url) =>
-                  handleSetCover(album.id, photoId, url, (t) => toastBanner(t.kind, t.text))
-                }
-                categories={CATEGORIES}
-                onBanner={(k, t) => toastBanner(k, t)}
-              />
-            ))}
+                className="inline-flex items-center gap-2 rounded-full bg-foreground px-4 py-2 text-sm font-medium text-background hover:-translate-y-0.5 transition-transform active:translate-y-0"
+              >
+                <Plus size={14} /> New album
+              </button>
+            </div>
           </div>
-        ) : null}
 
-        {creating ? (
-          <CreateAlbumForm
-            categories={CATEGORIES}
-            defaults={{
-              category: "Weddings",
-              title: "",
-              location: "",
-              cover_image_url: "",
-              description: "",
-            }}
-            saving={saving}
-            onCancel={() => setCreating(false)}
-            onSubmit={async (input) => {
-              setSaving(true);
+          {loadError ? (
+            <div className="rounded-xl border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+              {loadError}
+            </div>
+          ) : null}
+
+          {loading ? (
+            <div className="rounded-xl bg-card p-10 ring-1 ring-foreground/10 text-center">
+              <Loader2 size={20} className="mx-auto animate-spin text-primary" />
+              <p className="mt-3 text-sm text-foreground/60">Loading albums…</p>
+            </div>
+          ) : albums.length === 0 && !creating ? (
+            <EmptyAlbumsState onAdd={() => setCreating(true)} />
+          ) : null}
+
+          {!loading && albums.length ? (
+            <div className="space-y-4">
+              {albums.map((album, index) => (
+                <AlbumCard
+                  key={album.id}
+                  album={album}
+                  index={index}
+                  total={albums.length}
+                  expanded={expandedAlbumId === album.id}
+                  editing={editingAlbumId === album.id}
+                  saving={saving}
+                  onToggleExpand={() =>
+                    setExpandedAlbumId((cur) => (cur === album.id ? null : album.id))
+                  }
+                  onEdit={() => {
+                    setCreating(false);
+                    setExpandedAlbumId(album.id);
+                    setEditingAlbumId((cur) => (cur === album.id ? null : album.id));
+                  }}
+                  onMoveUp={() => move(index, -1)}
+                  onMoveDown={() => move(index, 1)}
+                  onSave={(patch) =>
+                    handleAlbumSave(album.id, patch, (t) => toastBanner(t.kind, t.text))
+                  }
+                  onDelete={() => removeAlbum(album.id)}
+                  onSavedReload={() => reload(true)}
+                  onSetCover={(photoId, url) =>
+                    handleSetCover(album.id, photoId, url, (t) => toastBanner(t.kind, t.text))
+                  }
+                  categories={CATEGORIES}
+                  onBanner={(k, t) => toastBanner(k, t)}
+                />
+              ))}
+            </div>
+          ) : null}
+
+          {creating ? (
+            <CreateAlbumForm
+              categories={CATEGORIES}
+              defaults={{
+                category: "Weddings",
+                title: "",
+                location: "",
+                cover_image_url: "",
+                description: "",
+              }}
+              saving={saving}
+              onCancel={() => setCreating(false)}
+              onSubmit={async (input) => {
+                setSaving(true);
+                try {
+                  const r = await createAlbumFn({ data: input });
+                  if (r.ok) {
+                    toastBanner("ok", "Album created. Now add your photos below.");
+                    setCreating(false);
+                    await reload(true);
+                    setTimeout(() => {
+                      setAlbums((cur) => {
+                        const last = cur[cur.length - 1];
+                        if (last) setExpandedAlbumId(last.id);
+                        return cur;
+                      });
+                    }, 100);
+                  } else {
+                    toastBanner("err", r.message ?? "Failed to create.");
+                  }
+                } catch {
+                  toastBanner("err", "Network error creating album.");
+                } finally {
+                  setSaving(false);
+                }
+              }}
+            />
+          ) : null}
+        </section>
+      ) : (
+        <section className="mx-auto max-w-7xl px-5 py-8 md:py-10">
+          <EnquiriesManager
+            enquiries={enquiries}
+            loading={enquiriesLoading}
+            loadError={enquiriesError}
+            statusFilter={statusFilter}
+            serviceFilter={serviceFilter}
+            expandedId={expandedEnquiryId}
+            busyId={enquiryBusyId}
+            onToggleExpand={(id) =>
+              setExpandedEnquiryId((cur) => (cur === id ? null : id))
+            }
+            onStatusChange={async (id, newStatus) => {
+              setEnquiryBusyId(id);
               try {
-                const r = await createAlbumFn({ data: input });
-                if (r.ok) {
-                  toastBanner("ok", "Album created. Now add your photos below.");
-                  setCreating(false);
-                  await reload(true);
-                  setTimeout(() => {
-                    setAlbums((cur) => {
-                      const last = cur[cur.length - 1];
-                      if (last) setExpandedAlbumId(last.id);
-                      return cur;
-                    });
-                  }, 100);
+                const r = await updateEnquiryStatusAdmin({ data: { id, status: newStatus } });
+                if ("ok" in r && r.ok) {
+                  toastBanner("ok", "Enquiry status updated.");
+                  setEnquiries((cur) =>
+                    cur.map((e) =>
+                      e.id === id ? { ...e, status: newStatus } : e,
+                    ),
+                  );
                 } else {
-                  toastBanner("err", r.message ?? "Failed to create.");
+                  toastBanner(
+                    "err",
+                    (r as { message?: string }).message ?? "Failed to update status.",
+                  );
                 }
               } catch {
-                toastBanner("err", "Network error creating album.");
+                toastBanner("err", "Network error updating status.");
               } finally {
-                setSaving(false);
+                setEnquiryBusyId(null);
               }
             }}
+            onRefresh={() => reloadEnquiries(true)}
+            onStatusFilterChange={(v) => setStatusFilter(v)}
+            onServiceFilterChange={(v) => setServiceFilter(v)}
           />
-        ) : null}
-      </section>
+        </section>
+      )}
     </main>
   );
 }
@@ -1466,5 +1602,498 @@ function CreateAlbumForm(props: {
         </div>
       </div>
     </form>
+  );
+}
+
+// --------------------------- ENQUIRIES MANAGER ---------------------------
+
+const ENQUIRY_STATUS_OPTIONS = ["new", "contacted", "archived"] as const;
+
+function statusBadgeClass(status: string): string {
+  switch (status) {
+    case "new":
+      return "bg-primary/12 text-primary ring-primary/25";
+    case "contacted":
+      return "bg-emerald-500/12 text-emerald-700 dark:text-emerald-400 ring-emerald-500/25";
+    case "archived":
+      return "bg-foreground/10 text-foreground/60 ring-foreground/15";
+    default:
+      return "bg-foreground/10 text-foreground/60 ring-foreground/15";
+  }
+}
+
+function formatDate(iso: string): string {
+  try {
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return iso;
+    return d.toLocaleDateString(undefined, {
+      year: "numeric",
+      month: "short",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+  } catch {
+    return iso;
+  }
+}
+
+function formatEventDate(iso: string): string {
+  try {
+    const d = new Date(iso + "T00:00:00Z");
+    if (Number.isNaN(d.getTime())) return iso;
+    return d.toLocaleDateString(undefined, {
+      year: "numeric",
+      month: "short",
+      day: "numeric",
+    });
+  } catch {
+    return iso;
+  }
+}
+
+type EnquiriesManagerProps = {
+  enquiries: readonly EnquiryRow[];
+  loading: boolean;
+  loadError: string | undefined;
+  statusFilter: string;
+  serviceFilter: string;
+  expandedId: string | null;
+  busyId: string | null;
+  onToggleExpand: (id: string) => void;
+  onStatusChange: (id: string, newStatus: string) => Promise<void> | void;
+  onRefresh: () => Promise<void> | void;
+  onStatusFilterChange: (value: string) => void;
+  onServiceFilterChange: (value: string) => void;
+};
+
+function EnquiriesManager(props: EnquiriesManagerProps) {
+  const stats = useMemo(() => {
+    const counts: Record<string, number> = {
+      new: 0,
+      contacted: 0,
+      archived: 0,
+    };
+    for (const e of props.enquiries) {
+      if (e.status === "new" || e.status === "contacted" || e.status === "archived") {
+        counts[e.status] = counts[e.status] ?? 0;
+        counts[e.status] += 1;
+      }
+    }
+    return {
+      total: props.enquiries.length,
+      new: counts.new,
+      contacted: counts.contacted,
+      archived: counts.archived,
+    };
+  }, [props.enquiries]);
+
+  const [refreshing, setRefreshing] = useState(false);
+  async function handleRefresh() {
+    setRefreshing(true);
+    try {
+      await props.onRefresh();
+    } finally {
+      setRefreshing(false);
+    }
+  }
+
+  return (
+    <div className="space-y-6">
+      {/* Stats + Header */}
+      <div className="flex flex-wrap items-end justify-between gap-4">
+        <div>
+          <h2 className="font-display text-2xl font-semibold md:text-3xl">Enquiries</h2>
+          <p className="mt-1 text-sm text-foreground/60 max-w-[56ch]">
+            Messages submitted by visitors through the contact form. Mark an enquiry as contacted after you&apos;ve replied,
+            or archive it when the conversation is complete.
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={() => void handleRefresh()}
+          disabled={refreshing || props.loading}
+          className="inline-flex items-center gap-2 rounded-full px-4 py-2 text-sm font-medium text-foreground/80 ring-1 ring-foreground/15 hover:bg-card disabled:opacity-60"
+        >
+          <RefreshCw size={13} className={refreshing ? "animate-spin" : ""} />
+          {refreshing ? "Refreshing…" : "Refresh"}
+        </button>
+      </div>
+
+      {/* Stat cards */}
+      <div className="grid gap-3 grid-cols-2 md:grid-cols-4">
+        <StatCard label="Total" value={stats.total} icon={Inbox} tone="default" />
+        <StatCard label="New" value={stats.new} icon={MessageSquare} tone="primary" />
+        <StatCard label="Contacted" value={stats.contacted} icon={CheckCircle2} tone="success" />
+        <StatCard label="Archived" value={stats.archived} icon={Archive} tone="muted" />
+      </div>
+
+      {/* Filters */}
+      <div className="flex flex-wrap items-center gap-3 rounded-xl bg-card p-4 ring-1 ring-foreground/10">
+        <div className="inline-flex items-center gap-1.5 text-xs font-medium text-foreground/55">
+          <Filter size={13} /> Filters
+        </div>
+        <label className="flex items-center gap-2">
+          <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-foreground/55">Status</span>
+          <select
+            value={props.statusFilter}
+            onChange={(e) => props.onStatusFilterChange(e.target.value)}
+            className="rounded-lg border border-foreground/15 bg-background px-3 py-1.5 text-sm outline-none focus:border-primary"
+          >
+            <option value="">All statuses</option>
+            {ENQUIRY_STATUS_OPTIONS.map((s) => (
+              <option key={s} value={s}>
+                {s.charAt(0).toUpperCase() + s.slice(1)}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="flex items-center gap-2">
+          <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-foreground/55">Service</span>
+          <select
+            value={props.serviceFilter}
+            onChange={(e) => props.onServiceFilterChange(e.target.value)}
+            className="rounded-lg border border-foreground/15 bg-background px-3 py-1.5 text-sm outline-none focus:border-primary"
+          >
+            <option value="">All services</option>
+            {services.map((s) => (
+              <option key={s.title} value={s.title}>
+                {s.title}
+              </option>
+            ))}
+          </select>
+        </label>
+        {(props.statusFilter || props.serviceFilter) ? (
+          <button
+            type="button"
+            onClick={() => {
+              props.onStatusFilterChange("");
+              props.onServiceFilterChange("");
+            }}
+            className="ml-auto rounded-full px-3 py-1.5 text-xs font-medium text-foreground/70 ring-1 ring-foreground/15 hover:bg-background"
+          >
+            Clear filters
+          </button>
+        ) : null}
+      </div>
+
+      {/* Error */}
+      {props.loadError ? (
+        <div className="rounded-xl border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+          {props.loadError}
+        </div>
+      ) : null}
+
+      {/* Loading */}
+      {props.loading ? (
+        <div className="rounded-xl bg-card p-10 ring-1 ring-foreground/10 text-center">
+          <Loader2 size={20} className="mx-auto animate-spin text-primary" />
+          <p className="mt-3 text-sm text-foreground/60">Loading enquiries…</p>
+        </div>
+      ) : props.enquiries.length === 0 ? (
+        <EmptyEnquiriesState hasFilter={!!(props.statusFilter || props.serviceFilter)} />
+      ) : (
+        <div className="space-y-3">
+          {props.enquiries.map((e) => (
+            <EnquiryCard
+              key={e.id}
+              enquiry={e}
+              expanded={props.expandedId === e.id}
+              busy={props.busyId === e.id}
+              onToggle={() => props.onToggleExpand(e.id)}
+              onStatusChange={(ns) => props.onStatusChange(e.id, ns)}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function StatCard(props: {
+  label: string;
+  value: number;
+  icon: React.ComponentType<{ size?: number; className?: string }>;
+  tone: "default" | "primary" | "success" | "muted";
+}) {
+  const Icon = props.icon;
+  const toneClass =
+    props.tone === "primary"
+      ? "bg-primary/12 text-primary ring-primary/25"
+      : props.tone === "success"
+        ? "bg-emerald-500/12 text-emerald-700 dark:text-emerald-400 ring-emerald-500/25"
+        : props.tone === "muted"
+          ? "bg-foreground/10 text-foreground/60 ring-foreground/15"
+          : "bg-foreground/8 text-foreground/75 ring-foreground/15";
+  return (
+    <div className="rounded-xl bg-card ring-1 ring-foreground/10 p-4">
+      <div className="flex items-center justify-between">
+        <span className="font-mono text-[10px] uppercase tracking-[0.16em] text-foreground/55">
+          {props.label}
+        </span>
+        <span className={`grid size-8 place-items-center rounded-full ring-1 ${toneClass}`}>
+          <Icon size={14} />
+        </span>
+      </div>
+      <p className="mt-3 font-display text-3xl font-semibold">{props.value}</p>
+    </div>
+  );
+}
+
+function EmptyEnquiriesState({ hasFilter }: { hasFilter: boolean }) {
+  return (
+    <div className="rounded-xl border border-dashed border-foreground/20 p-10 text-center ring-1 ring-foreground/5">
+      <Inbox size={26} className="mx-auto text-foreground/40" />
+      <h3 className="mt-4 font-display text-xl font-semibold">
+        {hasFilter ? "No enquiries match these filters" : "No enquiries yet"}
+      </h3>
+      <p className="mt-2 text-sm text-foreground/60 max-w-[48ch] mx-auto">
+        {hasFilter
+          ? "Try clearing the filters above to see all submissions."
+          : "Enquiries submitted by visitors through the /contact page will appear here. To test it, visit the contact page and submit the form."}
+      </p>
+    </div>
+  );
+}
+
+function EnquiryCard(props: {
+  enquiry: EnquiryRow;
+  expanded: boolean;
+  busy: boolean;
+  onToggle: () => void;
+  onStatusChange: (newStatus: string) => Promise<void> | void;
+}) {
+  const e = props.enquiry;
+  const busy = props.busy;
+  return (
+    <article
+      className={`rounded-xl bg-card ring-1 ring-foreground/10 overflow-hidden transition-all ${
+        props.expanded ? "ring-2 ring-primary/20" : ""
+      }`}
+    >
+      <button
+        type="button"
+        onClick={props.onToggle}
+        className="w-full text-left p-4 md:p-5 flex flex-col gap-4 md:flex-row md:items-center"
+      >
+        {/* Avatar / indicator */}
+        <div className="shrink-0 flex md:flex-col items-center md:items-start gap-3 md:gap-1">
+          <span className="grid size-10 place-items-center rounded-full bg-primary/12 text-primary">
+            <MessageSquare size={16} />
+          </span>
+          <span className="md:hidden text-[11px] font-mono uppercase tracking-wider text-foreground/50">
+            {formatDate(e.created_at)}
+          </span>
+        </div>
+
+        {/* Main info */}
+        <div className="flex-1 min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <h3 className="font-display text-base font-semibold truncate">{e.name}</h3>
+            <span
+              className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 font-mono text-[9px] uppercase tracking-[0.14em] ring-1 ${
+                statusBadgeClass(e.status)
+              }`}
+            >
+              {(e.status ?? "new").charAt(0).toUpperCase() + (e.status ?? "new").slice(1)}
+            </span>
+            <span className="rounded-full bg-primary/10 px-2 py-0.5 font-mono text-[9px] uppercase tracking-[0.14em] text-primary">
+              {e.service}
+            </span>
+          </div>
+          <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-foreground/60">
+            <span className="inline-flex items-center gap-1">
+              <Mail size={11} /> {e.email}
+            </span>
+            <span className="inline-flex items-center gap-1">
+              <Phone size={11} /> {e.phone}
+            </span>
+            <span className="hidden md:inline-flex items-center gap-1 text-foreground/45">
+              <CalendarDays size={11} /> {formatDate(e.created_at)}
+            </span>
+          </div>
+        </div>
+
+        {/* Event date + chevron */}
+        <div className="flex items-center justify-between md:justify-end md:gap-4 gap-3 shrink-0">
+          <div className="text-right">
+            <span className="block font-mono text-[9px] uppercase tracking-[0.14em] text-foreground/45">
+              Event date
+            </span>
+            <span className="inline-flex items-center gap-1 text-sm font-medium text-foreground/80">
+              <CalendarDays size={12} className="text-foreground/45" />
+              {formatEventDate(e.event_date)}
+            </span>
+          </div>
+          <span
+            className={`grid size-8 place-items-center rounded-full text-foreground/50 transition-transform ${
+              props.expanded ? "rotate-180" : ""
+            }`}
+          >
+            <ChevronDown size={16} />
+          </span>
+        </div>
+      </button>
+
+      {props.expanded ? (
+        <div className="border-t border-foreground/10 bg-background/40 p-4 md:p-6 space-y-5">
+          {/* Contact actions */}
+          <div className="flex flex-wrap items-center gap-2">
+            <a
+              href={`mailto:${encodeURIComponent(e.email)}?subject=${encodeURIComponent(
+                `Re: ${e.service} enquiry — Vessel Studio`,
+              )}&body=${encodeURIComponent(`Hi ${e.name},\n\nThanks for reaching out about your ${e.service} on ${e.event_date} in ${e.location}.\n\nRegarding your message:\n"${e.message}"\n\n`)}`}
+              className="inline-flex items-center gap-2 rounded-full bg-foreground px-4 py-2 text-sm font-medium text-background"
+            >
+              <Mail size={13} /> Reply via email
+            </a>
+            <a
+              href={`tel:${encodeURIComponent(e.phone)}`}
+              className="inline-flex items-center gap-2 rounded-full px-4 py-2 text-sm font-medium text-foreground/80 ring-1 ring-foreground/15 hover:bg-card"
+            >
+              <Phone size={13} /> Call {e.phone}
+            </a>
+            <div className="ml-auto flex items-center gap-2">
+              <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-foreground/55">
+                Mark as
+              </span>
+              {ENQUIRY_STATUS_OPTIONS.map((opt) => {
+                const selected = (e.status ?? "new") === opt;
+                return (
+                  <button
+                    key={opt}
+                    type="button"
+                    disabled={busy || selected}
+                    onClick={() => void props.onStatusChange(opt)}
+                    className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium ring-1 transition-colors disabled:opacity-50 ${
+                      selected
+                        ? "bg-foreground text-background ring-foreground/30"
+                        : "text-foreground/70 ring-foreground/15 hover:bg-card"
+                    }`}
+                  >
+                    {opt === "new" ? (
+                      <MessageSquare size={11} />
+                    ) : opt === "contacted" ? (
+                      <CheckCircle2 size={11} />
+                    ) : (
+                      <Archive size={11} />
+                    )}
+                    {opt.charAt(0).toUpperCase() + opt.slice(1)}
+                    {busy ? <Loader2 size={10} className="animate-spin" /> : null}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Full detail grid */}
+          <div className="grid gap-4 md:grid-cols-2">
+            <DetailField label="Name" value={e.name} icon={MessageSquare} />
+            <DetailField
+              label="Service requested"
+              value={e.service}
+              icon={Star}
+              highlight
+            />
+            <DetailField
+              label="Email"
+              value={e.email}
+              icon={Mail}
+              href={`mailto:${encodeURIComponent(e.email)}`}
+            />
+            <DetailField
+              label="Phone"
+              value={e.phone}
+              icon={Phone}
+              href={`tel:${encodeURIComponent(e.phone)}`}
+            />
+            <DetailField
+              label="Event date"
+              value={formatEventDate(e.event_date)}
+              icon={CalendarDays}
+            />
+            <DetailField label="Location" value={e.location} icon={MapPin} />
+          </div>
+
+          {/* Message */}
+          <div className="rounded-xl bg-background/60 ring-1 ring-foreground/10 p-4 md:p-5">
+            <div className="flex items-center gap-2 mb-3">
+              <span className="grid size-7 place-items-center rounded-full bg-primary/12 text-primary">
+                <MessageSquare size={13} />
+              </span>
+              <span className="font-mono text-[10px] uppercase tracking-[0.16em] text-foreground/55">
+                Visitor&apos;s message
+              </span>
+            </div>
+            <p className="whitespace-pre-wrap text-sm leading-relaxed text-foreground/80">
+              {e.message}
+            </p>
+          </div>
+
+          {/* Meta */}
+          <div className="flex flex-wrap gap-x-5 gap-y-1 pt-1 text-[11px] text-foreground/45">
+            <span>
+              Submitted: <span className="text-foreground/60">{formatDate(e.created_at)}</span>
+            </span>
+            {e.updated_at && e.updated_at !== e.created_at ? (
+              <span>
+                Updated: <span className="text-foreground/60">{formatDate(e.updated_at)}</span>
+              </span>
+            ) : null}
+            {e.source ? (
+              <span className="max-w-[40ch] truncate">
+                Source: <span className="text-foreground/60">{e.source}</span>
+              </span>
+            ) : null}
+            {e.ip_address ? (
+              <span>
+                IP: <span className="font-mono text-foreground/60">{e.ip_address}</span>
+              </span>
+            ) : null}
+            <span className="font-mono">id: {e.id.slice(0, 8)}…</span>
+          </div>
+        </div>
+      ) : null}
+    </article>
+  );
+}
+
+function DetailField(props: {
+  label: string;
+  value: string;
+  icon: React.ComponentType<{ size?: number; className?: string }>;
+  href?: string;
+  highlight?: boolean;
+}) {
+  const Icon = props.icon;
+  const inner = (
+    <div className="flex items-start gap-3 rounded-xl bg-card/70 ring-1 ring-foreground/8 px-4 py-3">
+      <span
+        className={`grid size-8 place-items-center rounded-full shrink-0 ${
+          props.highlight ? "bg-primary/12 text-primary" : "bg-foreground/8 text-foreground/60"
+        }`}
+      >
+        <Icon size={14} />
+      </span>
+      <div className="min-w-0 flex-1">
+        <span className="block font-mono text-[10px] uppercase tracking-[0.14em] text-foreground/50">
+          {props.label}
+        </span>
+        <span
+          className={`block text-sm font-medium text-foreground/85 truncate ${
+            props.href ? "hover:text-primary transition-colors" : ""
+          }`}
+        >
+          {props.value}
+        </span>
+      </div>
+    </div>
+  );
+  return props.href ? (
+    <a href={props.href} className="block">
+      {inner}
+    </a>
+  ) : (
+    inner
   );
 }

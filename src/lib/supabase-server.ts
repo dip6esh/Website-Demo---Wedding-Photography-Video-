@@ -136,6 +136,126 @@ export type ContactInquiryInsert = {
   ip_address?: string | null;
 };
 
+export type ContactInquiry = {
+  id: string;
+  name: string;
+  phone: string;
+  email: string;
+  service: string;
+  event_date: string;
+  location: string;
+  message: string;
+  source: string | null;
+  ip_address: string | null;
+  status: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type ContactInquiryFilters = {
+  status?: string;
+  service?: string;
+};
+
+export async function listContactInquiries(
+  filters?: ContactInquiryFilters,
+): Promise<{ inquiries: ContactInquiry[] } | { error: string }> {
+  const client = getSupabaseServerClient();
+  const cfgErr = notConfiguredCheck(client);
+  if (cfgErr) return cfgErr;
+  const anyClient = client as unknown as {
+    from(table: string): {
+      select(cols: string): unknown;
+    };
+  };
+  const base = anyClient
+    .from("contact_inquiries")
+    .select("id,name,phone,email,service,event_date,location,message,source,ip_address,status,created_at,updated_at") as
+    | {
+        order(col: string, opts: { ascending: boolean }): {
+          eq(col: string, val: unknown): Promise<{
+            data: ContactInquiry[] | null;
+            error: { message?: string } | null;
+          }>;
+        };
+      }
+    | unknown;
+  const ordered = (
+    base as {
+      order(col: string, opts: { ascending: boolean }): unknown;
+    }
+  ).order("created_at", { ascending: false });
+
+  let final: Promise<{
+    data: ContactInquiry[] | null;
+    error: { message?: string } | null;
+  }>;
+
+  const hasStatus = typeof filters?.status === "string" && filters.status.length > 0;
+  const hasService = typeof filters?.service === "string" && filters.service.length > 0;
+
+  if (hasStatus && hasService) {
+    final = (ordered as {
+      eq(a: string, b: unknown): {
+        eq(c: string, d: unknown): Promise<{
+          data: ContactInquiry[] | null;
+          error: { message?: string } | null;
+        }>;
+      };
+    })
+      .eq("status", filters!.status!)
+      .eq("service", filters!.service!);
+  } else if (hasStatus) {
+    final = (ordered as {
+      eq(a: string, b: unknown): Promise<{
+        data: ContactInquiry[] | null;
+        error: { message?: string } | null;
+      }>;
+    }).eq("status", filters!.status!);
+  } else if (hasService) {
+    final = (ordered as {
+      eq(a: string, b: unknown): Promise<{
+        data: ContactInquiry[] | null;
+        error: { message?: string } | null;
+      }>;
+    }).eq("service", filters!.service!);
+  } else {
+    final = ordered as Promise<{
+      data: ContactInquiry[] | null;
+      error: { message?: string } | null;
+    }>;
+  }
+
+  const { data, error } = await final;
+  if (error) {
+    console.error("[supabase] listContactInquiries failed:", error);
+    return { error: error.message || "Failed to load enquiries." };
+  }
+  return { inquiries: data ?? [] };
+}
+
+export async function updateContactInquiryStatus(
+  id: string,
+  status: string,
+): Promise<{ ok: true } | { error: string }> {
+  const client = getSupabaseServerClient();
+  const cfgErr = notConfiguredCheck(client);
+  if (cfgErr) return cfgErr;
+  const anyClient = client as unknown as {
+    from(table: string): {
+      update(p: unknown): {
+        eq(col: string, val: unknown): Promise<{ error: { message?: string } | null }>;
+      };
+    };
+  };
+  const { error } = await anyClient.from("contact_inquiries").update({ status }).eq("id", id);
+  if (error) {
+    console.error("[supabase] updateContactInquiryStatus failed:", error);
+    return { error: error.message || "Failed to update enquiry status." };
+  }
+  return { ok: true };
+}
+
 export async function insertContactInquiry(
   data: ContactInquiryInsert,
 ): Promise<{ id: string } | { error: string }> {
