@@ -1,0 +1,1320 @@
+import { createClient } from "@supabase/supabase-js";
+
+export type ServerEnv = NodeJS.ProcessEnv & Record<string, string | undefined>;
+
+export function getServerEnv(): ServerEnv {
+  return process.env as ServerEnv;
+}
+
+function firstNonEmpty(values: Array<string | undefined>): string | undefined {
+  for (const v of values) {
+    if (typeof v === "string" && v.length > 0) return v;
+  }
+  return undefined;
+}
+
+export function readSupabaseUrl(env?: ServerEnv): string | undefined {
+  const e = env ?? getServerEnv();
+  return firstNonEmpty([
+    e["SUPABASE_URL"],
+    e["VITE_SUPABASE_URL"],
+    e["PUBLIC_SUPABASE_URL"],
+    e["NEXT_PUBLIC_SUPABASE_URL"],
+    e["REACT_APP_SUPABASE_URL"],
+    e["EXPO_PUBLIC_SUPABASE_URL"],
+  ]);
+}
+
+export function readSupabaseAnonKey(env?: ServerEnv): string | undefined {
+  const e = env ?? getServerEnv();
+  return firstNonEmpty([
+    e["SUPABASE_ANON_KEY"],
+    e["VITE_SUPABASE_ANON_KEY"],
+    e["PUBLIC_SUPABASE_ANON_KEY"],
+    e["NEXT_PUBLIC_SUPABASE_ANON_KEY"],
+    e["REACT_APP_SUPABASE_ANON_KEY"],
+    e["EXPO_PUBLIC_SUPABASE_ANON_KEY"],
+  ]);
+}
+
+export function readSupabaseServiceRoleKey(env?: ServerEnv): string | undefined {
+  const e = env ?? getServerEnv();
+  return firstNonEmpty([
+    e["SUPABASE_SERVICE_ROLE_KEY"],
+    e["SUPABASE_SERVICE_KEY"],
+    e["VITE_SUPABASE_SERVICE_ROLE_KEY"],
+    e["VITE_SUPABASE_SERVICE_KEY"],
+  ]);
+}
+
+let _bootWarnedUrl = false;
+let _bootWarnedKey = false;
+
+function bootCheck(env: ServerEnv) {
+  const url = readSupabaseUrl(env);
+  const key = readSupabaseServiceRoleKey(env);
+  if (!url && !_bootWarnedUrl) {
+    _bootWarnedUrl = true;
+    console.warn(
+      "[supabase-server] SUPABASE_URL (or VITE_SUPABASE_URL) is not set. Server-side Supabase features will be disabled.",
+    );
+  }
+  if (url && !key && !_bootWarnedKey) {
+    _bootWarnedKey = true;
+    console.warn(
+      "[supabase-server] SUPABASE_SERVICE_ROLE_KEY is not set. Server-side Supabase writes and admin sign-up will fail.",
+    );
+  }
+}
+
+try {
+  bootCheck(getServerEnv());
+} catch {
+  // env access can be restricted in some edge runtimes; ignore at module level
+}
+
+type SupabaseServerClient = ReturnType<typeof createClient> | null;
+
+let _serviceClient: SupabaseServerClient | undefined;
+
+export function getSupabaseServerClient(): SupabaseServerClient {
+  if (_serviceClient !== undefined) return _serviceClient;
+  const env = getServerEnv();
+  const url = readSupabaseUrl(env);
+  const key = readSupabaseServiceRoleKey(env);
+  if (!url || !key) {
+    bootCheck(env);
+    _serviceClient = null;
+    return null;
+  }
+  try {
+    _serviceClient = createClient(url, key, {
+      auth: { persistSession: false, autoRefreshToken: false },
+    });
+  } catch (err) {
+    console.error("[supabase-server] Failed to create service-role client:", err);
+    _serviceClient = null;
+  }
+  return _serviceClient;
+}
+
+let _anonClient: SupabaseServerClient | undefined;
+
+export function getSupabaseAnonServerClient(): SupabaseServerClient {
+  if (_anonClient !== undefined) return _anonClient;
+  const env = getServerEnv();
+  const url = readSupabaseUrl(env);
+  const key = readSupabaseAnonKey(env);
+  if (!url || !key) {
+    _anonClient = null;
+    return null;
+  }
+  try {
+    _anonClient = createClient(url, key, {
+      auth: { persistSession: false, autoRefreshToken: false },
+    });
+  } catch (err) {
+    console.error("[supabase-server] Failed to create anon server client:", err);
+    _anonClient = null;
+  }
+  return _anonClient;
+}
+
+function getSupabaseReadClient(): SupabaseServerClient {
+  return getSupabaseServerClient() ?? getSupabaseAnonServerClient();
+}
+
+export type ContactInquiryInsert = {
+  name: string;
+  phone: string;
+  email: string;
+  service: string;
+  event_date: string;
+  location: string;
+  message: string;
+  source?: string | null;
+  ip_address?: string | null;
+};
+
+export type ContactInquiry = {
+  id: string;
+  name: string;
+  phone: string;
+  email: string;
+  service: string;
+  event_date: string;
+  location: string;
+  message: string;
+  source: string | null;
+  ip_address: string | null;
+  status: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type ContactInquiryFilters = {
+  status?: string;
+  service?: string;
+};
+
+export async function listContactInquiries(
+  filters?: ContactInquiryFilters,
+): Promise<{ inquiries: ContactInquiry[] } | { error: string }> {
+  const client = getSupabaseServerClient();
+  const cfgErr = notConfiguredCheck(client);
+  if (cfgErr) return cfgErr;
+  const anyClient = client as unknown as {
+    from(table: string): {
+      select(cols: string): unknown;
+    };
+  };
+  const base = anyClient
+    .from("contact_inquiries")
+    .select("id,name,phone,email,service,event_date,location,message,source,ip_address,status,created_at,updated_at") as
+    | {
+        order(col: string, opts: { ascending: boolean }): {
+          eq(col: string, val: unknown): Promise<{
+            data: ContactInquiry[] | null;
+            error: { message?: string } | null;
+          }>;
+        };
+      }
+    | unknown;
+  const ordered = (
+    base as {
+      order(col: string, opts: { ascending: boolean }): unknown;
+    }
+  ).order("created_at", { ascending: false });
+
+  let final: Promise<{
+    data: ContactInquiry[] | null;
+    error: { message?: string } | null;
+  }>;
+
+  const hasStatus = typeof filters?.status === "string" && filters.status.length > 0;
+  const hasService = typeof filters?.service === "string" && filters.service.length > 0;
+
+  if (hasStatus && hasService) {
+    final = (ordered as {
+      eq(a: string, b: unknown): {
+        eq(c: string, d: unknown): Promise<{
+          data: ContactInquiry[] | null;
+          error: { message?: string } | null;
+        }>;
+      };
+    })
+      .eq("status", filters!.status!)
+      .eq("service", filters!.service!);
+  } else if (hasStatus) {
+    final = (ordered as {
+      eq(a: string, b: unknown): Promise<{
+        data: ContactInquiry[] | null;
+        error: { message?: string } | null;
+      }>;
+    }).eq("status", filters!.status!);
+  } else if (hasService) {
+    final = (ordered as {
+      eq(a: string, b: unknown): Promise<{
+        data: ContactInquiry[] | null;
+        error: { message?: string } | null;
+      }>;
+    }).eq("service", filters!.service!);
+  } else {
+    final = ordered as Promise<{
+      data: ContactInquiry[] | null;
+      error: { message?: string } | null;
+    }>;
+  }
+
+  const { data, error } = await final;
+  if (error) {
+    console.error("[supabase] listContactInquiries failed:", error);
+    return { error: error.message || "Failed to load enquiries." };
+  }
+  return { inquiries: data ?? [] };
+}
+
+export async function updateContactInquiryStatus(
+  id: string,
+  status: string,
+): Promise<{ ok: true } | { error: string }> {
+  const client = getSupabaseServerClient();
+  const cfgErr = notConfiguredCheck(client);
+  if (cfgErr) return cfgErr;
+  const anyClient = client as unknown as {
+    from(table: string): {
+      update(p: unknown): {
+        eq(col: string, val: unknown): Promise<{ error: { message?: string } | null }>;
+      };
+    };
+  };
+  const { error } = await anyClient.from("contact_inquiries").update({ status }).eq("id", id);
+  if (error) {
+    console.error("[supabase] updateContactInquiryStatus failed:", error);
+    return { error: error.message || "Failed to update enquiry status." };
+  }
+  return { ok: true };
+}
+
+export async function insertContactInquiry(
+  data: ContactInquiryInsert,
+): Promise<{ id: string } | { error: string }> {
+  const client = getSupabaseServerClient();
+  if (!client) {
+    return { error: "Supabase is not configured on this server." };
+  }
+  type Row = { id: unknown };
+  const anyClient = client as unknown as {
+    from(table: string): {
+      insert(row: unknown): {
+        select(cols: string): {
+          limit(n: number): {
+            maybeSingle(): Promise<{ data: Row | null; error: { message?: string } | null }>;
+          };
+        };
+      };
+    };
+  };
+  const { data: rows, error } = await anyClient
+    .from("contact_inquiries")
+    .insert(data)
+    .select("id")
+    .limit(1)
+    .maybeSingle();
+  if (error) {
+    console.error("[supabase] insertContactInquiry failed:", error);
+    return { error: error.message || "Failed to save inquiry." };
+  }
+  if (!rows || rows.id === undefined || rows.id === null) {
+    return { error: "No row returned on insert." };
+  }
+  return { id: String(rows.id) };
+}
+
+// ------------------- Portfolio items ---------------------------
+
+export type PortfolioItem = {
+  id: string;
+  category: string;
+  title: string;
+  location: string;
+  image_url: string;
+  alt: string;
+  sort_order: number;
+  created_at: string;
+  updated_at: string;
+};
+
+export type PortfolioItemInput = {
+  category: string;
+  title: string;
+  location: string;
+  image_url: string;
+  alt: string;
+  sort_order?: number;
+};
+
+function configError(): { error: string } {
+  return { error: "Supabase is not configured on this server." };
+}
+
+function notConfiguredCheck(client: unknown): { error: string } | null {
+  return client ? null : configError();
+}
+
+export async function listPortfolioItems(): Promise<
+  { items: PortfolioItem[] } | { error: string }
+> {
+  const client = getSupabaseServerClient();
+  const cfgErr = notConfiguredCheck(client);
+  if (cfgErr) return cfgErr;
+  const anyClient = client as unknown as {
+    from(table: string): {
+      select(cols: string): {
+        order(col: string, opts?: { ascending?: boolean; nullsFirst?: boolean }): {
+          order(col2: string, opts2?: { ascending?: boolean }): Promise<{
+            data: PortfolioItem[] | null;
+            error: { message?: string } | null;
+          }>;
+        };
+      };
+    };
+  };
+  const { data, error } = await anyClient
+    .from("portfolio_items")
+    .select("id,category,title,location,image_url,alt,sort_order,created_at,updated_at")
+    .order("sort_order", { ascending: true, nullsFirst: false })
+    .order("created_at", { ascending: true });
+  if (error) {
+    console.error("[supabase] listPortfolioItems failed:", error);
+    return { error: error.message || "Failed to load portfolio." };
+  }
+  return { items: data ?? [] };
+}
+
+export async function getPortfolioItem(
+  id: string,
+): Promise<{ item: PortfolioItem } | { error: string }> {
+  const client = getSupabaseServerClient();
+  const cfgErr = notConfiguredCheck(client);
+  if (cfgErr) return cfgErr;
+  const anyClient = client as unknown as {
+    from(table: string): {
+      select(cols: string): {
+        eq(col: string, val: unknown): {
+          maybeSingle(): Promise<{
+            data: PortfolioItem | null;
+            error: { message?: string } | null;
+          }>;
+        };
+      };
+    };
+  };
+  const { data, error } = await anyClient
+    .from("portfolio_items")
+    .select("*")
+    .eq("id", id)
+    .maybeSingle();
+  if (error) {
+    console.error("[supabase] getPortfolioItem failed:", error);
+    return { error: error.message || "Failed to load item." };
+  }
+  if (!data) return { error: "Portfolio item not found." };
+  return { item: data };
+}
+
+export async function insertPortfolioItem(
+  input: PortfolioItemInput,
+): Promise<{ id: string } | { error: string }> {
+  const client = getSupabaseServerClient();
+  const cfgErr = notConfiguredCheck(client);
+  if (cfgErr) return cfgErr;
+  const row = {
+    category: input.category,
+    title: input.title,
+    location: input.location,
+    image_url: input.image_url,
+    alt: input.alt,
+  } as {
+    category: string;
+    title: string;
+    location: string;
+    image_url: string;
+    alt: string;
+    sort_order: number;
+  };
+  if (typeof input.sort_order === "number") row.sort_order = input.sort_order;
+  else row.sort_order = 0;
+  const anyClient = client as unknown as {
+    from(table: string): {
+      insert(r: unknown): {
+        select(c: string): {
+          maybeSingle(): Promise<{
+            data: { id: unknown } | null;
+            error: { message?: string } | null;
+          }>;
+        };
+      };
+    };
+  };
+  const { data, error } = await anyClient
+    .from("portfolio_items")
+    .insert(row)
+    .select("id")
+    .maybeSingle();
+  if (error) {
+    console.error("[supabase] insertPortfolioItem failed:", error);
+    return { error: error.message || "Failed to create item." };
+  }
+  if (!data || !data.id) return { error: "No id returned." };
+  return { id: String(data.id) };
+}
+
+export async function updatePortfolioItem(
+  id: string,
+  patch: Partial<PortfolioItemInput>,
+): Promise<{ ok: true } | { error: string }> {
+  const client = getSupabaseServerClient();
+  const cfgErr = notConfiguredCheck(client);
+  if (cfgErr) return cfgErr;
+  const anyClient = client as unknown as {
+    from(table: string): {
+      update(p: unknown): {
+        eq(col: string, val: unknown): Promise<{ error: { message?: string } | null }>;
+      };
+    };
+  };
+  const clean: Record<string, unknown> = {};
+  if (patch.category !== undefined) clean["category"] = patch.category;
+  if (patch.title !== undefined) clean["title"] = patch.title;
+  if (patch.location !== undefined) clean["location"] = patch.location;
+  if (patch.image_url !== undefined) clean["image_url"] = patch.image_url;
+  if (patch.alt !== undefined) clean["alt"] = patch.alt;
+  if (patch.sort_order !== undefined) clean["sort_order"] = patch.sort_order;
+  const { error } = await anyClient.from("portfolio_items").update(clean).eq("id", id);
+  if (error) {
+    console.error("[supabase] updatePortfolioItem failed:", error);
+    return { error: error.message || "Failed to update item." };
+  }
+  return { ok: true };
+}
+
+export async function reorderPortfolioItems(
+  orderedIds: string[],
+): Promise<{ ok: true } | { error: string }> {
+  const client = getSupabaseServerClient();
+  const cfgErr = notConfiguredCheck(client);
+  if (cfgErr) return cfgErr;
+  type Updater = {
+    update(p: unknown): {
+      eq(col: string, val: unknown): Promise<{ error: { message?: string } | null }>;
+    };
+  };
+  const anyClient = client as unknown as {
+    from(t: string): Updater;
+  };
+  const ids = orderedIds.filter(Boolean);
+  for (let i = 0; i < ids.length; i++) {
+    const id = ids[i];
+    if (!id) continue;
+    const { error } = await anyClient.from("portfolio_items").update({ sort_order: i }).eq("id", id);
+    if (error) {
+      console.error("[supabase] reorderPortfolioItems failed:", error);
+      return { error: error.message || "Failed to save order." };
+    }
+  }
+  return { ok: true };
+}
+
+export async function deletePortfolioItem(
+  id: string,
+): Promise<{ ok: true } | { error: string }> {
+  const client = getSupabaseServerClient();
+  const cfgErr = notConfiguredCheck(client);
+  if (cfgErr) return cfgErr;
+  const anyClient = client as unknown as {
+    from(table: string): {
+      delete(): {
+        eq(col: string, val: unknown): Promise<{ error: { message?: string } | null }>;
+      };
+    };
+  };
+  const { error } = await anyClient.from("portfolio_items").delete().eq("id", id);
+  if (error) {
+    console.error("[supabase] deletePortfolioItem failed:", error);
+    return { error: error.message || "Failed to delete item." };
+  }
+  return { ok: true };
+}
+
+// ------------------- Storage uploads ---------------------------
+
+export type UploadedImage = {
+  url: string;
+  path: string;
+};
+
+const PORTFOLIO_BUCKET = "portfolio-images";
+
+export async function uploadPortfolioImage(opts: {
+  filename: string;
+  contentType: string;
+  bytes: Uint8Array;
+}): Promise<UploadedImage | { error: string }> {
+  const client = getSupabaseServerClient();
+  const cfgErr = notConfiguredCheck(client);
+  if (cfgErr) return cfgErr;
+  if (!opts.filename || !opts.contentType || !opts.bytes || opts.bytes.length === 0) {
+    return { error: "Invalid file payload." };
+  }
+  const ext = (opts.filename.split(".").pop() ?? "jpg").toLowerCase();
+  const safeExt = /^(jpe?g|png|webp|gif|avif)$/.test(ext) ? (ext === "jpeg" ? "jpg" : ext) : "jpg";
+  const stamp = Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+  const path = `${stamp}.${safeExt}`;
+
+  const anyClient = client as unknown as {
+    storage: {
+      from(bucket: string): {
+        upload(
+          path: string,
+          body: Uint8Array,
+          opts: { contentType: string; upsert: boolean; cacheControl: string },
+        ): Promise<{
+          data: { path: string } | null;
+          error: { message?: string } | null;
+        }>;
+        getPublicUrl(path: string): { data: { publicUrl: string } };
+        remove(paths: string[]): Promise<{ error: { message?: string } | null }>;
+      };
+    };
+  };
+  const { data, error } = await anyClient.storage
+    .from(PORTFOLIO_BUCKET)
+    .upload(path, opts.bytes, {
+      contentType: opts.contentType,
+      upsert: true,
+      cacheControl: "public, max-age=31536000, immutable",
+    });
+  if (error || !data) {
+    console.error("[supabase] uploadPortfolioImage failed:", error);
+    return { error: error?.message || "Upload failed." };
+  }
+  const { data: urlData } = anyClient.storage.from(PORTFOLIO_BUCKET).getPublicUrl(data.path);
+  return { url: urlData.publicUrl, path: data.path };
+}
+
+export async function createSignedUploadUrl(opts: {
+  filename: string;
+  contentType: string;
+}): Promise<{ signedUrl: string; path: string; publicUrl: string } | { error: string }> {
+  const client = getSupabaseServerClient();
+  const cfgErr = notConfiguredCheck(client);
+  if (cfgErr) return cfgErr;
+
+  const ext = (opts.filename.split(".").pop() ?? "jpg").toLowerCase();
+  const safeExt = /^(jpe?g|png|webp|gif|avif)$/.test(ext) ? (ext === "jpeg" ? "jpg" : ext) : "jpg";
+  const stamp = Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+  const path = `${stamp}.${safeExt}`;
+
+  const anyClient = client as unknown as {
+    storage: {
+      from(bucket: string): {
+        createSignedUploadUrl(
+          path: string,
+          opts?: { upsert?: boolean },
+        ): Promise<{
+          data: { signedUrl: string; token: string; path: string } | null;
+          error: { message?: string } | null;
+        }>;
+        getPublicUrl(path: string): { data: { publicUrl: string } };
+      };
+    };
+  };
+
+  const { data, error } = await anyClient.storage
+    .from(PORTFOLIO_BUCKET)
+    .createSignedUploadUrl(path, { upsert: true });
+
+  if (error || !data) {
+    console.error("[supabase] createSignedUploadUrl failed:", error);
+    return { error: error?.message || "Failed to create upload token." };
+  }
+
+  const supabaseUrl = readSupabaseUrl()?.replace(/\/+$/, "") ?? "";
+  let finalSignedUrl = data.signedUrl;
+  if (finalSignedUrl && !finalSignedUrl.startsWith("http://") && !finalSignedUrl.startsWith("https://")) {
+    if (finalSignedUrl.startsWith("/storage/v1/")) {
+      finalSignedUrl = `${supabaseUrl}${finalSignedUrl}`;
+    } else if (finalSignedUrl.startsWith("/")) {
+      finalSignedUrl = `${supabaseUrl}/storage/v1${finalSignedUrl}`;
+    } else {
+      finalSignedUrl = `${supabaseUrl}/storage/v1/object/upload/sign/${PORTFOLIO_BUCKET}/${finalSignedUrl}`;
+    }
+  }
+
+  const { data: urlData } = anyClient.storage.from(PORTFOLIO_BUCKET).getPublicUrl(path);
+  return { signedUrl: finalSignedUrl, path, publicUrl: urlData.publicUrl };
+}
+
+export async function deleteStorageObject(
+  path: string,
+): Promise<{ ok: true } | { error: string }> {
+  const client = getSupabaseServerClient();
+  const cfgErr = notConfiguredCheck(client);
+  if (cfgErr) return cfgErr;
+  if (!path) return { ok: true };
+  const anyClient = client as unknown as {
+    storage: {
+      from(bucket: string): {
+        remove(paths: string[]): Promise<{ error: { message?: string } | null }>;
+      };
+    };
+  };
+  const { error } = await anyClient.storage.from(PORTFOLIO_BUCKET).remove([path]);
+  if (error) {
+    console.error("[supabase] deleteStorageObject failed:", error);
+    return { error: error.message || "Failed to delete file." };
+  }
+  return { ok: true };
+}
+
+// ------------------- Albums ---------------------------
+
+export type Album = {
+  id: string;
+  category: string;
+  title: string;
+  location: string;
+  cover_image_url: string;
+  description: string;
+  youtube_url: string;
+  sort_order: number;
+  created_at: string;
+  updated_at: string;
+};
+
+export type AlbumInput = {
+  category: string;
+  title: string;
+  location: string;
+  cover_image_url?: string;
+  description?: string;
+  youtube_url?: string;
+  sort_order?: number;
+};
+
+export type AlbumPhoto = {
+  id: string;
+  album_id: string;
+  image_url: string;
+  alt: string;
+  caption: string;
+  sort_order: number;
+  created_at: string;
+  updated_at: string;
+};
+
+export type AlbumPhotoInput = {
+  album_id: string;
+  image_url: string;
+  alt?: string;
+  caption?: string;
+  sort_order?: number;
+};
+
+// -- Album CRUD
+
+export async function listAlbums(): Promise<
+  { albums: Album[] } | { error: string }
+> {
+  const client = getSupabaseReadClient();
+  const cfgErr = notConfiguredCheck(client);
+  if (cfgErr) return cfgErr;
+  const anyClient = client as unknown as {
+    from(table: string): {
+      select(cols: string): {
+        order(col: string, opts?: { ascending?: boolean; nullsFirst?: boolean }): {
+          order(col2: string, opts2?: { ascending?: boolean }): Promise<{
+            data: Album[] | null;
+            error: { message?: string } | null;
+          }>;
+        };
+      };
+    };
+  };
+  const { data, error } = await anyClient
+    .from("albums")
+    .select("id,category,title,location,cover_image_url,description,youtube_url,sort_order,created_at,updated_at")
+    .order("sort_order", { ascending: true, nullsFirst: false })
+    .order("created_at", { ascending: true });
+  if (error) {
+    console.error("[supabase] listAlbums failed:", error);
+    return { error: error.message || "Failed to load albums." };
+  }
+  return { albums: data ?? [] };
+}
+
+export async function getAlbum(
+  id: string,
+): Promise<{ album: Album } | { error: string }> {
+  const client = getSupabaseReadClient();
+  const cfgErr = notConfiguredCheck(client);
+  if (cfgErr) return cfgErr;
+  const anyClient = client as unknown as {
+    from(table: string): {
+      select(cols: string): {
+        eq(col: string, val: unknown): {
+          maybeSingle(): Promise<{
+            data: Album | null;
+            error: { message?: string } | null;
+          }>;
+        };
+      };
+    };
+  };
+  const { data, error } = await anyClient
+    .from("albums")
+    .select("*")
+    .eq("id", id)
+    .maybeSingle();
+  if (error) {
+    console.error("[supabase] getAlbum failed:", error, "for id:", id);
+    return { error: error.message || "Failed to load album." };
+  }
+  if (!data) return { error: "Album not found." };
+  return { album: data };
+}
+
+export async function insertAlbum(
+  input: AlbumInput,
+): Promise<{ id: string } | { error: string }> {
+  const client = getSupabaseServerClient();
+  const cfgErr = notConfiguredCheck(client);
+  if (cfgErr) return cfgErr;
+  const row = {
+    category: input.category,
+    title: input.title,
+    location: input.location,
+  } as {
+    category: string;
+    title: string;
+    location: string;
+    cover_image_url: string;
+    description: string;
+    youtube_url: string;
+    sort_order: number;
+  };
+  if (input.cover_image_url !== undefined) row.cover_image_url = input.cover_image_url;
+  else row.cover_image_url = "";
+  if (input.description !== undefined) row.description = input.description;
+  else row.description = "";
+  if (input.youtube_url !== undefined) row.youtube_url = input.youtube_url;
+  else row.youtube_url = "";
+  if (typeof input.sort_order === "number") row.sort_order = input.sort_order;
+  else row.sort_order = 0;
+  const anyClient = client as unknown as {
+    from(table: string): {
+      insert(r: unknown): {
+        select(c: string): {
+          maybeSingle(): Promise<{
+            data: { id: unknown } | null;
+            error: { message?: string } | null;
+          }>;
+        };
+      };
+    };
+  };
+  const { data, error } = await anyClient
+    .from("albums")
+    .insert(row)
+    .select("id")
+    .maybeSingle();
+  if (error) {
+    console.error("[supabase] insertAlbum failed:", error);
+    return { error: error.message || "Failed to create album." };
+  }
+  if (!data || !data.id) return { error: "No id returned." };
+  return { id: String(data.id) };
+}
+
+export async function updateAlbum(
+  id: string,
+  patch: Partial<AlbumInput>,
+): Promise<{ ok: true } | { error: string }> {
+  const client = getSupabaseServerClient();
+  const cfgErr = notConfiguredCheck(client);
+  if (cfgErr) return cfgErr;
+  const anyClient = client as unknown as {
+    from(table: string): {
+      update(p: unknown): {
+        eq(col: string, val: unknown): Promise<{ error: { message?: string } | null }>;
+      };
+    };
+  };
+  const clean: Record<string, unknown> = {};
+  if (patch.category !== undefined) clean["category"] = patch.category;
+  if (patch.title !== undefined) clean["title"] = patch.title;
+  if (patch.location !== undefined) clean["location"] = patch.location;
+  if (patch.cover_image_url !== undefined) clean["cover_image_url"] = patch.cover_image_url;
+  if (patch.description !== undefined) clean["description"] = patch.description;
+  if (patch.youtube_url !== undefined) clean["youtube_url"] = patch.youtube_url;
+  if (patch.sort_order !== undefined) clean["sort_order"] = patch.sort_order;
+  const { error } = await anyClient.from("albums").update(clean).eq("id", id);
+  if (error) {
+    console.error("[supabase] updateAlbum failed:", error);
+    return { error: error.message || "Failed to update album." };
+  }
+  return { ok: true };
+}
+
+export async function reorderAlbums(
+  orderedIds: string[],
+): Promise<{ ok: true } | { error: string }> {
+  const client = getSupabaseServerClient();
+  const cfgErr = notConfiguredCheck(client);
+  if (cfgErr) return cfgErr;
+  type Updater = {
+    update(p: unknown): {
+      eq(col: string, val: unknown): Promise<{ error: { message?: string } | null }>;
+    };
+  };
+  const anyClient = client as unknown as {
+    from(t: string): Updater;
+  };
+  const ids = orderedIds.filter(Boolean);
+  for (let i = 0; i < ids.length; i++) {
+    const id = ids[i];
+    if (!id) continue;
+    const { error } = await anyClient.from("albums").update({ sort_order: i }).eq("id", id);
+    if (error) {
+      console.error("[supabase] reorderAlbums failed:", error);
+      return { error: error.message || "Failed to save order." };
+    }
+  }
+  return { ok: true };
+}
+
+export async function deleteAlbum(
+  id: string,
+): Promise<{ ok: true } | { error: string }> {
+  const client = getSupabaseServerClient();
+  const cfgErr = notConfiguredCheck(client);
+  if (cfgErr) return cfgErr;
+  const anyClient = client as unknown as {
+    from(table: string): {
+      delete(): {
+        eq(col: string, val: unknown): Promise<{ error: { message?: string } | null }>;
+      };
+    };
+  };
+  const { error } = await anyClient.from("albums").delete().eq("id", id);
+  if (error) {
+    console.error("[supabase] deleteAlbum failed:", error);
+    return { error: error.message || "Failed to delete album." };
+  }
+  return { ok: true };
+}
+
+// -- Album Photo CRUD
+
+export async function listAlbumPhotos(
+  albumId: string,
+): Promise<{ photos: AlbumPhoto[] } | { error: string }> {
+  const client = getSupabaseReadClient();
+  const cfgErr = notConfiguredCheck(client);
+  if (cfgErr) return cfgErr;
+  const anyClient = client as unknown as {
+    from(table: string): {
+      select(cols: string): {
+        eq(col: string, val: unknown): {
+          order(col: string, opts?: { ascending?: boolean; nullsFirst?: boolean }): {
+            order(col2: string, opts2?: { ascending?: boolean }): Promise<{
+              data: AlbumPhoto[] | null;
+              error: { message?: string } | null;
+            }>;
+          };
+        };
+      };
+    };
+  };
+  const { data, error } = await anyClient
+    .from("album_photos")
+    .select("id,album_id,image_url,alt,caption,sort_order,created_at,updated_at")
+    .eq("album_id", albumId)
+    .order("sort_order", { ascending: true, nullsFirst: false })
+    .order("created_at", { ascending: true });
+  if (error) {
+    console.error("[supabase] listAlbumPhotos failed:", error, "for albumId:", albumId);
+    return { error: error.message || "Failed to load photos." };
+  }
+  return { photos: data ?? [] };
+}
+
+export async function insertAlbumPhoto(
+  input: AlbumPhotoInput,
+): Promise<{ id: string } | { error: string }> {
+  const client = getSupabaseServerClient();
+  const cfgErr = notConfiguredCheck(client);
+  if (cfgErr) return cfgErr;
+  const row = {
+    album_id: input.album_id,
+    image_url: input.image_url,
+  } as {
+    album_id: string;
+    image_url: string;
+    alt: string;
+    caption: string;
+    sort_order: number;
+  };
+  if (input.alt !== undefined) row.alt = input.alt;
+  else row.alt = "";
+  if (input.caption !== undefined) row.caption = input.caption;
+  else row.caption = "";
+  if (typeof input.sort_order === "number") row.sort_order = input.sort_order;
+  else row.sort_order = 0;
+  const anyClient = client as unknown as {
+    from(table: string): {
+      insert(r: unknown): {
+        select(c: string): {
+          maybeSingle(): Promise<{
+            data: { id: unknown } | null;
+            error: { message?: string } | null;
+          }>;
+        };
+      };
+    };
+  };
+  const { data, error } = await anyClient
+    .from("album_photos")
+    .insert(row)
+    .select("id")
+    .maybeSingle();
+  if (error) {
+    console.error("[supabase] insertAlbumPhoto failed:", error);
+    return { error: error.message || "Failed to add photo." };
+  }
+  if (!data || !data.id) return { error: "No id returned." };
+  return { id: String(data.id) };
+}
+
+export async function updateAlbumPhoto(
+  id: string,
+  patch: Partial<Omit<AlbumPhotoInput, "album_id">>,
+): Promise<{ ok: true } | { error: string }> {
+  const client = getSupabaseServerClient();
+  const cfgErr = notConfiguredCheck(client);
+  if (cfgErr) return cfgErr;
+  const anyClient = client as unknown as {
+    from(table: string): {
+      update(p: unknown): {
+        eq(col: string, val: unknown): Promise<{ error: { message?: string } | null }>;
+      };
+    };
+  };
+  const clean: Record<string, unknown> = {};
+  if (patch.image_url !== undefined) clean["image_url"] = patch.image_url;
+  if (patch.alt !== undefined) clean["alt"] = patch.alt;
+  if (patch.caption !== undefined) clean["caption"] = patch.caption;
+  if (patch.sort_order !== undefined) clean["sort_order"] = patch.sort_order;
+  const { error } = await anyClient.from("album_photos").update(clean).eq("id", id);
+  if (error) {
+    console.error("[supabase] updateAlbumPhoto failed:", error);
+    return { error: error.message || "Failed to update photo." };
+  }
+  return { ok: true };
+}
+
+export async function reorderAlbumPhotos(
+  orderedIds: string[],
+): Promise<{ ok: true } | { error: string }> {
+  const client = getSupabaseServerClient();
+  const cfgErr = notConfiguredCheck(client);
+  if (cfgErr) return cfgErr;
+  type Updater = {
+    update(p: unknown): {
+      eq(col: string, val: unknown): Promise<{ error: { message?: string } | null }>;
+    };
+  };
+  const anyClient = client as unknown as {
+    from(t: string): Updater;
+  };
+  const ids = orderedIds.filter(Boolean);
+  for (let i = 0; i < ids.length; i++) {
+    const id = ids[i];
+    if (!id) continue;
+    const { error } = await anyClient.from("album_photos").update({ sort_order: i }).eq("id", id);
+    if (error) {
+      console.error("[supabase] reorderAlbumPhotos failed:", error);
+      return { error: error.message || "Failed to save photo order." };
+    }
+  }
+  return { ok: true };
+}
+
+export async function deleteAlbumPhoto(
+  id: string,
+): Promise<{ ok: true } | { error: string }> {
+  const client = getSupabaseServerClient();
+  const cfgErr = notConfiguredCheck(client);
+  if (cfgErr) return cfgErr;
+  const anyClient = client as unknown as {
+    from(table: string): {
+      delete(): {
+        eq(col: string, val: unknown): Promise<{ error: { message?: string } | null }>;
+      };
+    };
+  };
+  const { error } = await anyClient.from("album_photos").delete().eq("id", id);
+  if (error) {
+    console.error("[supabase] deleteAlbumPhoto failed:", error);
+    return { error: error.message || "Failed to delete photo." };
+  }
+  return { ok: true };
+}
+
+export function extractStoragePath(url: string): string {
+  if (!url) return "";
+  const match = url.match(/\/storage\/v1\/object\/public\/[^/]+\/([^?]+)/);
+  return match ? decodeURIComponent(match[1] ?? "") : "";
+}
+
+// ------------------- Album Videos ---------------------------
+
+export type AlbumVideo = {
+  id: string;
+  album_id: string;
+  youtube_url: string;
+  title: string;
+  is_featured: boolean;
+  sort_order: number;
+  created_at: string;
+  updated_at: string;
+};
+
+export type AlbumVideoInput = {
+  album_id: string;
+  youtube_url: string;
+  title?: string;
+  sort_order?: number;
+};
+
+/** Fetch all videos for a given album, ordered by sort_order then created_at. */
+export async function listAlbumVideos(
+  albumId: string,
+): Promise<{ videos: AlbumVideo[] } | { error: string }> {
+  const client = getSupabaseReadClient();
+  const cfgErr = notConfiguredCheck(client);
+  if (cfgErr) return cfgErr;
+  const anyClient = client as unknown as {
+    from(table: string): {
+      select(cols: string): {
+        eq(col: string, val: unknown): {
+          order(col: string, opts?: { ascending?: boolean; nullsFirst?: boolean }): {
+            order(col2: string, opts2?: { ascending?: boolean }): Promise<{
+              data: AlbumVideo[] | null;
+              error: { message?: string } | null;
+            }>;
+          };
+        };
+      };
+    };
+  };
+  const { data, error } = await anyClient
+    .from("album_videos")
+    .select("id,album_id,youtube_url,title,is_featured,sort_order,created_at,updated_at")
+    .eq("album_id", albumId)
+    .order("sort_order", { ascending: true, nullsFirst: false })
+    .order("created_at", { ascending: true });
+  if (error) {
+    console.error("[supabase] listAlbumVideos failed:", error);
+    return { error: error.message || "Failed to load videos." };
+  }
+  return { videos: data ?? [] };
+}
+
+/** Insert a new video row. Returns the new video id. */
+export async function insertAlbumVideo(
+  input: AlbumVideoInput,
+): Promise<{ id: string } | { error: string }> {
+  const client = getSupabaseServerClient();
+  const cfgErr = notConfiguredCheck(client);
+  if (cfgErr) return cfgErr;
+  const row: Record<string, unknown> = {
+    album_id: input.album_id,
+    youtube_url: input.youtube_url,
+    title: input.title ?? "",
+    sort_order: typeof input.sort_order === "number" ? input.sort_order : 0,
+    is_featured: false,
+  };
+  const anyClient = client as unknown as {
+    from(table: string): {
+      insert(r: unknown): {
+        select(c: string): {
+          maybeSingle(): Promise<{
+            data: { id: unknown } | null;
+            error: { message?: string } | null;
+          }>;
+        };
+      };
+    };
+  };
+  const { data, error } = await anyClient
+    .from("album_videos")
+    .insert(row)
+    .select("id")
+    .maybeSingle();
+  if (error) {
+    console.error("[supabase] insertAlbumVideo failed:", error);
+    return { error: error.message || "Failed to add video." };
+  }
+  if (!data || !data.id) return { error: "No id returned." };
+  return { id: String(data.id) };
+}
+
+/** Delete a video row by id. */
+export async function deleteAlbumVideo(
+  id: string,
+): Promise<{ ok: true } | { error: string }> {
+  const client = getSupabaseServerClient();
+  const cfgErr = notConfiguredCheck(client);
+  if (cfgErr) return cfgErr;
+  const anyClient = client as unknown as {
+    from(table: string): {
+      delete(): {
+        eq(col: string, val: unknown): Promise<{ error: { message?: string } | null }>;
+      };
+    };
+  };
+  const { error } = await anyClient.from("album_videos").delete().eq("id", id);
+  if (error) {
+    console.error("[supabase] deleteAlbumVideo failed:", error);
+    return { error: error.message || "Failed to delete video." };
+  }
+  return { ok: true };
+}
+
+/**
+ * Set is_featured = true on `videoId` and false on all other videos for the same album.
+ * Passing videoId = null clears the featured flag for the whole album.
+ */
+export async function setFeaturedAlbumVideo(
+  albumId: string,
+  videoId: string | null,
+): Promise<{ ok: true } | { error: string }> {
+  const client = getSupabaseServerClient();
+  const cfgErr = notConfiguredCheck(client);
+  if (cfgErr) return cfgErr;
+  type Updater = {
+    update(p: unknown): {
+      eq(col: string, val: unknown): Promise<{ error: { message?: string } | null }>;
+      neq(col: string, val: unknown): {
+        eq(col2: string, val2: unknown): Promise<{ error: { message?: string } | null }>;
+      };
+    };
+  };
+  const anyClient = client as unknown as { from(t: string): Updater };
+
+  // Clear featured on all videos for this album
+  const { error: clearErr } = await anyClient
+    .from("album_videos")
+    .update({ is_featured: false })
+    .eq("album_id", albumId);
+  if (clearErr) {
+    console.error("[supabase] setFeaturedAlbumVideo clear failed:", clearErr);
+    return { error: clearErr.message || "Failed to clear featured flag." };
+  }
+
+  // Set the selected video as featured
+  if (videoId) {
+    const { error: setErr } = await anyClient
+      .from("album_videos")
+      .update({ is_featured: true })
+      .eq("id", videoId);
+    if (setErr) {
+      console.error("[supabase] setFeaturedAlbumVideo set failed:", setErr);
+      return { error: setErr.message || "Failed to set featured video." };
+    }
+  }
+  return { ok: true };
+}
+
+export type FeaturedVideo = {
+  id: string;
+  album_id: string;
+  youtube_url: string;
+  title: string;
+  album_title: string;
+  album_location: string;
+  album_cover_image_url: string;
+};
+
+/**
+ * Returns up to `limit` featured videos across all albums (for home page).
+ * Each row is a join of album_videos + albums.
+ */
+export async function listFeaturedVideos(
+  limit = 3,
+): Promise<{ videos: FeaturedVideo[] } | { error: string }> {
+  const client = getSupabaseReadClient();
+  const cfgErr = notConfiguredCheck(client);
+  if (cfgErr) return cfgErr;
+  const anyClient = client as unknown as {
+    from(table: string): {
+      select(cols: string): {
+        eq(col: string, val: unknown): {
+          order(col: string, opts?: { ascending?: boolean }): {
+            limit(n: number): Promise<{
+              data: Array<{
+                id: string;
+                album_id: string;
+                youtube_url: string;
+                title: string;
+                albums: {
+                  title: string;
+                  location: string;
+                  cover_image_url: string;
+                  sort_order: number;
+                } | null;
+              }> | null;
+              error: { message?: string } | null;
+            }>;
+          };
+        };
+      };
+    };
+  };
+  const { data, error } = await anyClient
+    .from("album_videos")
+    .select("id,album_id,youtube_url,title,albums(title,location,cover_image_url,sort_order)")
+    .eq("is_featured", true)
+    .order("created_at", { ascending: true })
+    .limit(limit);
+  if (error) {
+    console.error("[supabase] listFeaturedVideos failed:", error);
+    return { error: error.message || "Failed to load featured videos." };
+  }
+  const videos: FeaturedVideo[] = (data ?? []).map((row) => ({
+    id: row.id,
+    album_id: row.album_id,
+    youtube_url: row.youtube_url,
+    title: row.title || (row.albums?.title ?? ""),
+    album_title: row.albums?.title ?? "",
+    album_location: row.albums?.location ?? "",
+    album_cover_image_url: row.albums?.cover_image_url ?? "",
+  }));
+  return { videos };
+}
+
+// ─── Hero Tiles ────────────────────────────────────────────────────────────────
+
+export type HeroTileRow = {
+  id: number;
+  slot: number;
+  service_key: string;
+  photo_url: string;
+  label: string;
+  updated_at: string;
+};
+
+export async function listHeroTiles(): Promise<{ tiles: HeroTileRow[] } | { error: string }> {
+  const client = getSupabaseReadClient();
+  if (!client) return { error: "Supabase not configured" };
+  const anyClient = client as unknown as {
+    from(t: string): {
+      select(cols: string): {
+        order(col: string, opts: { ascending: boolean }): Promise<{
+          data: HeroTileRow[] | null;
+          error: { message?: string } | null;
+        }>;
+      };
+    };
+  };
+  const { data, error } = await anyClient
+    .from("hero_tiles")
+    .select("id,slot,service_key,photo_url,label,updated_at")
+    .order("slot", { ascending: true });
+  if (error) return { error: error.message || "Failed to load hero tiles." };
+  return { tiles: (data ?? []) as HeroTileRow[] };
+}
+
+export async function updateHeroTile(
+  slot: number,
+  fields: { service_key?: string | undefined; photo_url?: string | undefined; label?: string | undefined },
+): Promise<{ ok: true } | { error: string }> {
+  const client = getSupabaseServerClient();
+  const cfgErr = notConfiguredCheck(client);
+  if (cfgErr) return cfgErr;
+  const anyClient = client as unknown as {
+    from(t: string): {
+      update(data: Record<string, unknown>): {
+        eq(col: string, val: unknown): Promise<{ error: { message?: string } | null }>;
+      };
+    };
+  };
+  const { error } = await anyClient
+    .from("hero_tiles")
+    .update({ ...fields, updated_at: new Date().toISOString() })
+    .eq("slot", slot);
+  if (error) return { error: error.message || "Failed to update hero tile." };
+  return { ok: true };
+}

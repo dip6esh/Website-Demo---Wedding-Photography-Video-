@@ -1,0 +1,616 @@
+import { createFileRoute, Link, notFound, useRouter } from "@tanstack/react-router";
+import { ArrowLeft, ChevronLeft, ChevronRight, Play, X } from "lucide-react";
+import { useEffect, useState } from "react";
+import { getPublicAlbum, listPublicAlbumPhotos, listPublicAlbums, type PublicAlbum, type PublicAlbumPhoto } from "./-_albums.list";
+import { extractYouTubeId } from "@/lib/utils";
+
+type LoaderAlbum = PublicAlbum;
+type LoaderPhoto = PublicAlbumPhoto;
+type LoaderData = {
+  album: LoaderAlbum;
+  siblings: LoaderAlbum[];
+  source: "fallback" | "database";
+};
+
+export const Route = createFileRoute("/albums/$albumId")({
+  staleTime: 1000 * 60 * 5,
+  preloadStaleTime: 1000 * 60 * 5,
+  head: (ctx) => {
+    const album = (ctx.loaderData as { album?: { title?: string; description?: string; cover_image?: string } } | undefined)?.album;
+    const title = album?.title ? `${album.title} — Vessel Studio` : "Album — Vessel Studio";
+    const desc = album?.description?.slice(0, 160) || "A project gallery from Vessel Studio.";
+    const ogImage = album?.cover_image;
+    const meta: Array<{ name?: string; property?: string; content: string }> = [
+      { name: "description", content: desc },
+      { property: "og:title", content: title },
+      { property: "og:description", content: desc },
+      { property: "og:type", content: "website" },
+    ];
+    if (ogImage) meta.push({ property: "og:image", content: ogImage });
+    return { title, meta };
+  },
+  loader: async ({ params }) => {
+    const [listRes, res] = await Promise.all([
+      listPublicAlbums(),
+      getPublicAlbum({ data: params.albumId }),
+    ]);
+    const siblings: PublicAlbum[] = "albums" in listRes ? listRes.albums : [];
+    const siblingMatch = siblings.find((a) => a.id === params.albumId);
+    console.debug("[albums.$albumId loader] getPublicAlbum result:", {
+      found: res.found,
+      source: res.source,
+      id: params.albumId,
+      siblingMatchTitle: siblingMatch?.title,
+    });
+
+    let album: PublicAlbum;
+    let source: "fallback" | "database";
+    if (res.found && res.album) {
+      album = res.album;
+      source = res.source;
+    } else if (siblingMatch) {
+      let realPhotos: PublicAlbumPhoto[] = siblingMatch.photos ?? [];
+      try {
+        const phRes = await listPublicAlbumPhotos({ data: params.albumId });
+        if ("ok" in phRes && Array.isArray(phRes.photos) && phRes.photos.length > 0) {
+          realPhotos = phRes.photos;
+          console.debug("[albums.$albumId loader] sibling fallback loaded", realPhotos.length, "real photos for", siblingMatch.title);
+        }
+      } catch (e) {
+        console.warn("[albums.$albumId loader] sibling fallback photo load failed:", e);
+      }
+      if (realPhotos.length === 0) {
+        realPhotos = [
+          {
+            id: `${siblingMatch.id}-cover`,
+            image: siblingMatch.cover_image,
+            alt: siblingMatch.title,
+            caption: "",
+          },
+        ];
+      }
+      album = {
+        id: siblingMatch.id,
+        category: siblingMatch.category,
+        title: siblingMatch.title,
+        location: siblingMatch.location,
+        cover_image: siblingMatch.cover_image,
+        description: siblingMatch.description,
+        youtube_url: siblingMatch.youtube_url ?? "",
+        photo_count: realPhotos.length,
+        photos: realPhotos,
+        videos: siblingMatch.videos ?? [],
+      };
+      source = res.source;
+      console.debug("[albums.$albumId loader] Using sibling fallback for", params.albumId, "=", siblingMatch.title);
+    } else {
+      console.warn("[albums.$albumId loader] Album truly missing, throwing 404 for:", params.albumId);
+      throw notFound();
+    }
+
+    return {
+      album,
+      siblings,
+      source,
+    } as const;
+  },
+  component: AlbumDetailPage,
+  notFoundComponent: () => {
+    const router = useRouter();
+    return (
+      <main className="min-h-screen bg-background">
+        <div className="mx-auto max-w-4xl px-5 py-20 text-center">
+          <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-primary">404</p>
+          <h1 className="mt-4 font-display text-4xl font-semibold md:text-5xl">Album not found</h1>
+          <p className="mt-4 text-foreground/65 max-w-md mx-auto">
+            This album may have been moved or no longer exists.
+          </p>
+          <button
+            type="button"
+            onClick={() => router.navigate({ to: "/works" })}
+            className="mt-8 inline-flex items-center gap-2 rounded-full bg-foreground px-5 py-3 text-sm font-medium text-background hover:-translate-y-0.5 transition-transform"
+          >
+            <ArrowLeft size={14} /> Back to all works
+          </button>
+        </div>
+      </main>
+    );
+  },
+});
+
+function AlbumDetailPage() {
+  const loader = Route.useLoaderData() as LoaderData;
+  const album = loader.album;
+  const siblings = loader.siblings;
+  const photos = album.photos ?? [];
+  const [activeIndex, setActiveIndex] = useState<number | null>(null);
+
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (activeIndex === null) return;
+      if (e.key === "Escape") setActiveIndex(null);
+      else if (e.key === "ArrowLeft") {
+        setActiveIndex((i) => (typeof i === "number" ? (i - 1 + photos.length) % photos.length : i));
+      } else if (e.key === "ArrowRight") {
+        setActiveIndex((i) => (typeof i === "number" ? (i + 1) % photos.length : i));
+      }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [activeIndex, photos.length]);
+
+  useEffect(() => {
+    if (activeIndex === null) return;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = prev;
+    };
+  }, [activeIndex]);
+
+  const nextAlbum = (() => {
+    const idx = siblings.findIndex((a: LoaderAlbum) => a.id === album.id);
+    if (idx === -1) return undefined;
+    return siblings[(idx + 1) % siblings.length];
+  })();
+  const prevAlbum = (() => {
+    const idx = siblings.findIndex((a: LoaderAlbum) => a.id === album.id);
+    if (idx === -1) return undefined;
+    return siblings[(idx - 1 + siblings.length) % siblings.length];
+  })();
+
+  const effectiveCover = album.cover_image || photos[0]?.image || "";
+
+  return (
+    <main className="min-h-screen bg-background">
+      {/* Back link */}
+      <section className="border-b border-foreground/10">
+        <div className="mx-auto max-w-6xl px-5 py-5">
+          <Link
+            to="/works"
+            preload="intent"
+            className="inline-flex items-center gap-2 text-sm text-foreground/65 hover:text-primary transition-colors"
+          >
+            <ArrowLeft size={14} /> Back to all works
+          </Link>
+        </div>
+      </section>
+
+      {/* Hero / cover */}
+      {effectiveCover ? (
+        <section className="border-b border-foreground/10">
+          <div className="mx-auto max-w-7xl px-5 py-10 md:py-14">
+            <div className="relative overflow-hidden rounded-2xl aspect-[16/9] md:aspect-[21/9] bg-foreground/5 ring-1 ring-foreground/10">
+              <img
+                src={effectiveCover}
+                alt={album.title}
+                className="size-full object-cover"
+                loading="eager"
+                width={1920}
+                height={1080}
+              />
+              <div className="absolute inset-0 bg-gradient-to-t from-black/55 via-black/10 to-transparent" />
+              <div className="absolute inset-x-0 bottom-0 p-6 md:p-10 text-white">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="rounded-full bg-white/15 backdrop-blur px-3 py-1 font-mono text-[10px] uppercase tracking-[0.16em] ring-1 ring-white/20">
+                    {album.category}
+                  </span>
+                  <span className="font-mono text-[10px] uppercase tracking-[0.16em] text-white/75">
+                    {album.photo_count} photos
+                  </span>
+                </div>
+                <h1 className="mt-3 font-display text-4xl font-semibold leading-[1.05] md:text-6xl">
+                  {album.title}
+                </h1>
+                <p className="mt-2 font-mono text-[11px] uppercase tracking-[0.16em] text-white/75 md:text-sm">
+                  {album.location}
+                </p>
+              </div>
+            </div>
+          </div>
+        </section>
+      ) : null}
+
+      {/* Description */}
+      <section className="mx-auto max-w-3xl px-5 py-12 md:py-16">
+        {!effectiveCover ? (
+          <div className="mb-8">
+            <span className="rounded-full bg-primary/10 px-3 py-1 font-mono text-[10px] uppercase tracking-[0.14em] text-primary">
+              {album.category}
+            </span>
+            <h1 className="mt-4 font-display text-4xl font-semibold md:text-6xl">{album.title}</h1>
+            <p className="mt-3 font-mono text-[11px] uppercase tracking-[0.16em] text-foreground/55">
+              {album.location} · {album.photo_count} photos
+            </p>
+          </div>
+        ) : null}
+        {album.description ? (
+          <div className="prose prose-neutral max-w-none">
+            <p className="text-lg leading-relaxed text-foreground/80 whitespace-pre-wrap">
+              {album.description}
+            </p>
+          </div>
+        ) : null}
+      </section>
+
+      {/* Watch the film(s) */}
+      {(() => {
+        const vids =
+          album.videos && album.videos.length > 0
+            ? album.videos
+            : album.youtube_url
+              ? [
+                  {
+                    id: "legacy",
+                    youtube_url: album.youtube_url,
+                    title: album.title,
+                    is_featured: false,
+                    sort_order: 0,
+                  },
+                ]
+              : [];
+        return <AlbumFilmsSection videos={vids} albumTitle={album.title} />;
+      })()}
+
+      {/* Gallery */}
+      {photos.length ? (
+        <section className="mx-auto max-w-6xl px-5 pb-20 md:pb-28">
+          <div className="mb-6 flex items-center justify-between">
+            <p className="font-mono text-[11px] uppercase tracking-[0.2em] text-foreground/55">
+              Gallery
+            </p>
+            <p className="text-xs text-foreground/45">
+              Click a photo to open it · use ← → keys to navigate
+            </p>
+          </div>
+          <div className="columns-1 sm:columns-2 lg:columns-3 gap-3">
+            {photos.map((p: LoaderPhoto, i: number) => (
+              <GalleryPhoto key={p.id} index={i} photo={p} onOpen={() => setActiveIndex(i)} />
+            ))}
+          </div>
+        </section>
+      ) : null}
+
+      {/* Prev / Next album navigation */}
+      {(prevAlbum || nextAlbum) && photos.length ? (
+        <section className="border-t border-foreground/10 bg-card/40">
+          <div className={`mx-auto max-w-6xl px-5 py-10 grid gap-4 ${prevAlbum && nextAlbum ? "md:grid-cols-2" : "md:grid-cols-1 md:max-w-2xl"}`}>
+            {prevAlbum ? (
+              <Link
+                to="/albums/$albumId"
+                params={{ albumId: prevAlbum.id }}
+                preload="intent"
+                className="group relative overflow-hidden rounded-xl bg-card ring-1 ring-foreground/10 hover:ring-foreground/20 hover:-translate-y-0.5 hover:shadow-lg transition-[box-shadow,ring-color,transform] duration-200"
+              >
+                <div className="flex items-stretch">
+                  <div className="w-1/3 aspect-[4/5] shrink-0 bg-foreground/5 overflow-hidden">
+                    <img
+                      src={prevAlbum.cover_image}
+                      alt={prevAlbum.title}
+                      className="size-full object-cover group-hover:scale-105 transition-transform duration-700"
+                      loading="lazy"
+                    />
+                  </div>
+                  <div className="flex-1 p-4 flex flex-col justify-center">
+                    <span className="font-mono text-[10px] uppercase tracking-[0.16em] text-foreground/45 flex items-center gap-1">
+                      <ChevronLeft size={12} /> Previous
+                    </span>
+                    <p className="mt-1 font-mono text-[10px] uppercase tracking-[0.14em] text-primary/85">
+                      {prevAlbum.category}
+                    </p>
+                    <h3 className="mt-1 font-display text-lg font-semibold leading-snug">
+                      {prevAlbum.title}
+                    </h3>
+                    <p className="text-xs text-foreground/55 mt-0.5">{prevAlbum.location}</p>
+                  </div>
+                </div>
+              </Link>
+            ) : null}
+            {nextAlbum ? (
+              <Link
+                to="/albums/$albumId"
+                params={{ albumId: nextAlbum.id }}
+                preload="intent"
+                className="group relative overflow-hidden rounded-xl bg-card ring-1 ring-foreground/10 hover:ring-foreground/20 hover:-translate-y-0.5 hover:shadow-lg transition-[box-shadow,ring-color,transform] duration-200"
+              >
+                <div className="flex items-stretch flex-row-reverse">
+                  <div className="w-1/3 aspect-[4/5] shrink-0 bg-foreground/5 overflow-hidden">
+                    <img
+                      src={nextAlbum.cover_image}
+                      alt={nextAlbum.title}
+                      className="size-full object-cover group-hover:scale-105 transition-transform duration-700"
+                      loading="lazy"
+                    />
+                  </div>
+                  <div className="flex-1 p-4 flex flex-col justify-center text-right">
+                    <span className="font-mono text-[10px] uppercase tracking-[0.16em] text-foreground/45 flex items-center gap-1 justify-end">
+                      Next <ChevronRight size={12} />
+                    </span>
+                    <p className="mt-1 font-mono text-[10px] uppercase tracking-[0.14em] text-primary/85">
+                      {nextAlbum.category}
+                    </p>
+                    <h3 className="mt-1 font-display text-lg font-semibold leading-snug">
+                      {nextAlbum.title}
+                    </h3>
+                    <p className="text-xs text-foreground/55 mt-0.5">{nextAlbum.location}</p>
+                  </div>
+                </div>
+              </Link>
+            ) : null}
+          </div>
+        </section>
+      ) : null}
+
+      {/* Lightbox */}
+      {activeIndex !== null && photos[activeIndex] ? (
+        <Lightbox
+          photos={photos}
+          index={activeIndex}
+          onClose={() => setActiveIndex(null)}
+          onPrev={() =>
+            setActiveIndex((i) => (typeof i === "number" ? (i - 1 + photos.length) % photos.length : i))
+          }
+          onNext={() =>
+            setActiveIndex((i) => (typeof i === "number" ? (i + 1) % photos.length : i))
+          }
+        />
+      ) : null}
+    </main>
+  );
+}
+
+
+function AlbumFilmsSection({
+  videos,
+  albumTitle,
+}: {
+  videos: Array<{ id: string; youtube_url: string; title: string; is_featured: boolean }>;
+  albumTitle: string;
+}) {
+  const [activeVideoId, setActiveVideoId] = useState<string | null>(null);
+
+  const validVideos = videos
+    .map((v) => ({ ...v, vid: extractYouTubeId(v.youtube_url) }))
+    .filter((v): v is typeof v & { vid: string } => !!v.vid);
+
+  if (validVideos.length === 0) return null;
+
+  if (validVideos.length === 1) {
+    const v = validVideos[0]!;
+    return <AlbumFilmSection videoId={v.vid} title={v.title || albumTitle} />;
+  }
+
+  return (
+    <section className="border-y border-foreground/10 bg-foreground text-background">
+      <div className="mx-auto max-w-6xl px-5 py-12 md:py-16">
+        <p className="mb-2 font-mono text-[11px] uppercase tracking-[0.2em] text-primary">
+          Films & Videos
+        </p>
+        <h2 className="mb-8 font-display text-2xl font-semibold md:text-3xl">
+          Films from this project ({validVideos.length})
+        </h2>
+        <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
+          {validVideos.map((v) => {
+            const thumb = `https://img.youtube.com/vi/${v.vid}/maxresdefault.jpg`;
+            const isPlaying = activeVideoId === v.id;
+            return (
+              <article key={v.id} className="group">
+                <div className="relative aspect-video overflow-hidden rounded-xl bg-background/10 ring-1 ring-background/20 shadow-lg">
+                  {isPlaying ? (
+                    <iframe
+                      className="size-full"
+                      src={`https://www.youtube-nocookie.com/embed/${v.vid}?autoplay=1`}
+                      title={v.title || albumTitle}
+                      loading="lazy"
+                      allow="autoplay; encrypted-media; picture-in-picture"
+                      allowFullScreen
+                    />
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => setActiveVideoId(v.id)}
+                      className="group relative size-full text-left"
+                      aria-label={`Play film — ${v.title || albumTitle}`}
+                    >
+                      <img
+                        src={thumb}
+                        alt=""
+                        loading="lazy"
+                        className="size-full object-cover opacity-80 transition-transform duration-700 group-hover:scale-105"
+                        onError={(e) => {
+                          (e.currentTarget as HTMLImageElement).src = `https://img.youtube.com/vi/${v.vid}/hqdefault.jpg`;
+                        }}
+                      />
+                      {v.is_featured ? (
+                        <span className="absolute top-2 left-2 inline-flex items-center gap-1 rounded-full bg-amber-400 px-2 py-0.5 font-mono text-[9px] uppercase tracking-wider text-black font-semibold shadow">
+                          ⭐ Featured
+                        </span>
+                      ) : null}
+                      <span className="absolute inset-0 bg-black/25 group-hover:bg-black/15 transition-colors" />
+                      <span className="absolute inset-0 grid place-items-center">
+                        <span className="grid size-12 place-items-center rounded-full bg-background text-foreground shadow-xl transition-transform group-hover:scale-110">
+                          <Play size={18} fill="currentColor" />
+                        </span>
+                      </span>
+                    </button>
+                  )}
+                </div>
+                <h3 className="mt-3 font-display text-base font-semibold">
+                  {v.title || (v.is_featured ? `${albumTitle} · Highlight` : albumTitle)}
+                </h3>
+              </article>
+            );
+          })}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function AlbumFilmSection({ videoId, title }: { videoId: string; title: string }) {
+  const [playing, setPlaying] = useState(false);
+  const thumb = `https://img.youtube.com/vi/${videoId}/maxresdefault.jpg`;
+  return (
+    <section className="border-y border-foreground/10 bg-foreground text-background">
+      <div className="mx-auto max-w-4xl px-5 py-12 md:py-16">
+        <p className="mb-3 font-mono text-[11px] uppercase tracking-[0.2em] text-primary">
+          Watch the film
+        </p>
+        <h2 className="mb-6 font-display text-2xl font-semibold md:text-3xl">
+          {title}
+        </h2>
+        <div className="relative aspect-video overflow-hidden rounded-2xl bg-background/10 ring-1 ring-background/20 shadow-2xl">
+          {playing ? (
+            <iframe
+              className="size-full"
+              src={`https://www.youtube-nocookie.com/embed/${videoId}?autoplay=1`}
+              title={`${title} film`}
+              loading="lazy"
+              allow="autoplay; encrypted-media; picture-in-picture"
+              allowFullScreen
+            />
+          ) : (
+            <button
+              type="button"
+              onClick={() => setPlaying(true)}
+              className="group relative size-full text-left"
+              aria-label={`Play film — ${title}`}
+            >
+              <img
+                src={thumb}
+                alt=""
+                loading="lazy"
+                className="size-full object-cover opacity-80 transition-transform duration-700 group-hover:scale-[1.02]"
+                onError={(e) => { (e.currentTarget as HTMLImageElement).src = `https://img.youtube.com/vi/${videoId}/hqdefault.jpg`; }}
+              />
+              <span className="absolute inset-0 bg-black/30 group-hover:bg-black/20 transition-colors" />
+              <span className="absolute inset-0 grid place-items-center">
+                <span className="grid size-18 place-items-center rounded-full bg-background text-foreground shadow-xl transition-transform group-hover:scale-110 size-16">
+                  <Play size={22} fill="currentColor" />
+                </span>
+              </span>
+            </button>
+          )}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function GalleryPhoto({
+  photo,
+  onOpen,
+  index,
+}: {
+  photo: LoaderPhoto;
+  onOpen: () => void;
+  index: number;
+}) {
+  // Show a mix of aspect ratios for a masonry feel; prefer 4:5 for most, 1:1, 3:4, 16:9 sprinkled
+  const patterns = ["aspect-[4/5]", "aspect-square", "aspect-[3/4]", "aspect-[4/5]", "aspect-[3/2]"];
+  const cls = patterns[index % patterns.length];
+  return (
+    <button
+      type="button"
+      onClick={onOpen}
+      className={`group relative mb-3 inline-block w-full overflow-hidden rounded-xl bg-foreground/5 ring-1 ring-foreground/10 hover:ring-foreground/25 hover:-translate-y-0.5 hover:shadow-lg transition-[box-shadow,ring-color,transform] duration-200 break-inside-avoid ${cls}`}
+      aria-label={`Open ${photo.alt || photo.caption || `photo ${index + 1}`}`}
+    >
+      <img
+        src={photo.image}
+        alt={photo.alt || photo.caption || ""}
+        loading={index < 6 ? "eager" : "lazy"}
+        fetchPriority={index < 2 ? "high" : "auto"}
+        decoding="async"
+        className="size-full object-cover group-hover:scale-[1.03] transition-transform duration-700"
+      />
+      {photo.caption ? (
+        <span className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/60 to-transparent p-3 text-left text-xs text-white opacity-0 group-hover:opacity-100 transition-opacity">
+          {photo.caption}
+        </span>
+      ) : null}
+    </button>
+  );
+}
+
+function Lightbox({
+  photos,
+  index,
+  onClose,
+  onPrev,
+  onNext,
+}: {
+  photos: LoaderPhoto[];
+  index: number;
+  onClose: () => void;
+  onPrev: () => void;
+  onNext: () => void;
+}) {
+  const photo = photos[index];
+  if (!photo) {
+    return null;
+  }
+  return (
+    <div
+      className="fixed inset-0 z-50 bg-black/90 backdrop-blur-sm grid place-items-center p-4 md:p-10"
+      onClick={onClose}
+      role="dialog"
+      aria-modal="true"
+    >
+      <button
+        type="button"
+        onClick={(e) => {
+          e.stopPropagation();
+          onClose();
+        }}
+        className="absolute top-4 right-4 grid size-10 place-items-center rounded-full bg-white/10 text-white ring-1 ring-white/15 hover:bg-white/15"
+        aria-label="Close"
+      >
+        <X size={18} />
+      </button>
+
+      <button
+        type="button"
+        onClick={(e) => {
+          e.stopPropagation();
+          onPrev();
+        }}
+        className="absolute left-3 md:left-6 top-1/2 -translate-y-1/2 grid size-10 md:size-12 place-items-center rounded-full bg-white/10 text-white ring-1 ring-white/15 hover:bg-white/15"
+        aria-label="Previous photo"
+      >
+        <ChevronLeft size={20} />
+      </button>
+
+      <button
+        type="button"
+        onClick={(e) => {
+          e.stopPropagation();
+          onNext();
+        }}
+        className="absolute right-3 md:right-6 top-1/2 -translate-y-1/2 grid size-10 md:size-12 place-items-center rounded-full bg-white/10 text-white ring-1 ring-white/15 hover:bg-white/15"
+        aria-label="Next photo"
+      >
+        <ChevronRight size={20} />
+      </button>
+
+      <figure
+        className="max-h-[88vh] max-w-[96vw] relative"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <img
+          src={photo.image}
+          alt={photo.alt || photo.caption || ""}
+          className="max-h-[80vh] max-w-full rounded-md object-contain"
+        />
+        {photo.caption ? (
+          <figcaption className="mt-3 text-center text-sm text-white/80">
+            {photo.caption}
+          </figcaption>
+        ) : null}
+        <p className="mt-1 text-center font-mono text-[10px] uppercase tracking-[0.18em] text-white/45">
+          {index + 1} / {photos.length}
+        </p>
+      </figure>
+    </div>
+  );
+}
