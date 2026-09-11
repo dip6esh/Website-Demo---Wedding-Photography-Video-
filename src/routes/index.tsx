@@ -143,21 +143,41 @@ function HomePage() {
 
       <section className="border-b border-foreground/15">
         <div className="mx-auto max-w-6xl px-5 py-14 md:py-20">
-          <div className="mb-8 flex items-end justify-between">
+          <div className="mb-10 flex flex-col justify-between gap-4 sm:flex-row sm:items-end">
             <div>
               <p className="mb-3 font-mono text-[11px] uppercase tracking-[0.2em] text-foreground/45">What we do</p>
               <h2 className="font-display text-2xl font-semibold md:text-4xl">Six ways to work with us</h2>
             </div>
-            <Link to="/services" className="hidden font-mono text-[11px] uppercase tracking-[0.18em] text-foreground/60 transition-colors hover:text-primary sm:inline">All services ↗</Link>
+            <Link
+              to="/services"
+              className="inline-flex items-center gap-1.5 font-mono text-[11px] uppercase tracking-[0.18em] text-foreground/60 transition-colors hover:text-primary"
+            >
+              All services <ArrowUpRight size={13} />
+            </Link>
           </div>
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+
+          <div className="divide-y divide-foreground/15 border-y border-foreground/15">
             {services.slice(0, 6).map((service) => (
-              <article key={service.number} className="flex flex-col rounded-xl bg-card p-5 ring-1 ring-foreground/10">
-                <img src={service.image} alt={service.alt} width={1024} height={640} loading="lazy" className="mb-5 aspect-[3/2] w-full rounded-lg object-cover" />
-                <div className="mb-2 flex items-start gap-3"><span className="font-mono text-[10px] text-primary">{service.number}</span><h3 className="font-display text-base font-semibold leading-snug">{service.title}</h3></div>
-                <p className="flex-1 text-sm leading-relaxed text-foreground/65">{service.description}</p>
-                <Link to="/contact" className="mt-5 inline-flex items-center gap-2 font-mono text-[11px] uppercase tracking-[0.16em] text-primary transition-colors hover:text-foreground">Enquire <ArrowUpRight size={13} /></Link>
-              </article>
+              <Link
+                key={service.number}
+                to="/contact"
+                className="group -mx-4 block rounded-xl px-4 py-6 transition-colors hover:bg-card/70 md:grid md:grid-cols-12 md:items-center md:gap-8 md:py-7"
+              >
+                <div className="flex items-baseline gap-4 md:col-span-5">
+                  <span className="font-mono text-xs font-semibold text-primary">{service.number}</span>
+                  <h3 className="font-display text-lg font-semibold tracking-tight text-foreground transition-colors group-hover:text-primary md:text-xl">
+                    {service.title}
+                  </h3>
+                </div>
+                <p className="mt-2 text-sm leading-relaxed text-foreground/65 md:col-span-5 md:mt-0 md:text-sm">
+                  {service.description}
+                </p>
+                <div className="mt-4 flex items-center justify-start md:col-span-2 md:mt-0 md:justify-end">
+                  <span className="inline-flex items-center gap-1.5 font-mono text-[11px] uppercase tracking-[0.16em] text-primary transition-all duration-200 group-hover:translate-x-1 group-hover:text-foreground">
+                    Enquire <ArrowUpRight size={14} />
+                  </span>
+                </div>
+              </Link>
             ))}
           </div>
         </div>
