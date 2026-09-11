@@ -68,6 +68,37 @@ export const Route = createFileRoute("/admin")({
       { name: "description", content: "Private admin panel for Vessel Studio owners and team." },
     ],
   }),
+  loader: async () => {
+    try {
+      const auth = await adminMe();
+      if (auth && auth.ok) {
+        const [albumsRes, enquiriesRes] = await Promise.allSettled([
+          listAlbumsAdmin(),
+          listEnquiriesAdmin({ data: {} }),
+        ]);
+        return {
+          authed: true as const,
+          email: (auth as { email?: string }).email,
+          initialAlbums:
+            albumsRes.status === "fulfilled" && "albums" in albumsRes.value
+              ? (albumsRes.value.albums as AlbumRow[])
+              : ([] as AlbumRow[]),
+          initialEnquiries:
+            enquiriesRes.status === "fulfilled" && "inquiries" in enquiriesRes.value
+              ? (enquiriesRes.value.inquiries as unknown as EnquiryRow[])
+              : ([] as EnquiryRow[]),
+        };
+      }
+    } catch (err) {
+      console.warn("[admin loader] Auth check error:", err);
+    }
+    return {
+      authed: false as const,
+      email: undefined,
+      initialAlbums: [] as AlbumRow[],
+      initialEnquiries: [] as EnquiryRow[],
+    };
+  },
   component: AdminRoute,
 });
 
@@ -115,9 +146,18 @@ type EnquiryRow = {
 type AdminTab = "albums" | "enquiries" | "hero";
 
 function AdminRoute() {
-  const [authed, setAuthed] = useState<boolean | "loading">("loading");
+  const loaderData = Route.useLoaderData();
+  const [authed, setAuthed] = useState<boolean | "loading">(
+    typeof loaderData?.authed === "boolean" ? loaderData.authed : "loading",
+  );
+  const router = useRouter();
 
   useEffect(() => {
+    if (typeof loaderData?.authed === "boolean") {
+      setAuthed(loaderData.authed);
+      return undefined;
+    }
+
     let mounted = true;
     void adminMe().then((r) => {
       if (mounted) setAuthed(r.ok === true);
@@ -125,11 +165,29 @@ function AdminRoute() {
     return () => {
       mounted = false;
     };
-  }, []);
+  }, [loaderData]);
 
   if (authed === "loading") return <CenteredLoading />;
-  if (authed === false) return <LoginScreen onLoggedIn={() => setAuthed(true)} />;
-  return <AdminScreen onLoggedOut={() => setAuthed(false)} />;
+  if (authed === false) {
+    return (
+      <LoginScreen
+        onLoggedIn={() => {
+          setAuthed(true);
+          router.invalidate();
+        }}
+      />
+    );
+  }
+  return (
+    <AdminScreen
+      initialAlbums={loaderData?.initialAlbums}
+      initialEnquiries={loaderData?.initialEnquiries}
+      onLoggedOut={() => {
+        setAuthed(false);
+        router.invalidate();
+      }}
+    />
+  );
 }
 
 function CenteredLoading() {
@@ -300,10 +358,18 @@ function LoginScreen({ onLoggedIn }: { onLoggedIn: () => void }) {
 
 // --------------------------- ADMIN SCREEN ---------------------------
 
-function AdminScreen({ onLoggedOut }: { onLoggedOut: () => void }) {
+function AdminScreen({
+  initialAlbums = [],
+  initialEnquiries = [],
+  onLoggedOut,
+}: {
+  initialAlbums?: AlbumRow[];
+  initialEnquiries?: EnquiryRow[];
+  onLoggedOut: () => void;
+}) {
   const [activeTab, setActiveTab] = useState<AdminTab>("albums");
-  const [albums, setAlbums] = useState<AlbumRow[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [albums, setAlbums] = useState<AlbumRow[]>(initialAlbums);
+  const [loading, setLoading] = useState(initialAlbums.length === 0);
   const [loadError, setLoadError] = useState<string | undefined>();
   const [banner, setBanner] = useState<{ kind: "ok" | "err"; text: string } | undefined>();
   const [expandedAlbumId, setExpandedAlbumId] = useState<string | null>(null);
@@ -311,8 +377,8 @@ function AdminScreen({ onLoggedOut }: { onLoggedOut: () => void }) {
   const [creating, setCreating] = useState(false);
   const [saving, setSaving] = useState(false);
   const [reorderDirty, setReorderDirty] = useState(false);
-  const [enquiries, setEnquiries] = useState<EnquiryRow[]>([]);
-  const [enquiriesLoading, setEnquiriesLoading] = useState(true);
+  const [enquiries, setEnquiries] = useState<EnquiryRow[]>(initialEnquiries);
+  const [enquiriesLoading, setEnquiriesLoading] = useState(false);
   const [enquiriesError, setEnquiriesError] = useState<string | undefined>();
   const [statusFilter, setStatusFilter] = useState<string>("");
   const [serviceFilter, setServiceFilter] = useState<string>("");
@@ -350,11 +416,15 @@ function AdminScreen({ onLoggedOut }: { onLoggedOut: () => void }) {
   }
 
   useEffect(() => {
-    void reload();
+    if (initialAlbums.length === 0) {
+      void reload();
+    }
   }, []);
 
   useEffect(() => {
-    void reloadEnquiries();
+    if (statusFilter || serviceFilter || initialEnquiries.length === 0) {
+      void reloadEnquiries();
+    }
   }, [statusFilter, serviceFilter]);
 
   function toastBanner(kind: "ok" | "err", text: string) {
