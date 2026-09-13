@@ -109,22 +109,22 @@ function ContactPage() {
 
               <div className="grid gap-5 sm:grid-cols-2">
                 <label className="space-y-2">
-                  <span className="font-mono text-[10px] uppercase tracking-[0.16em] text-foreground/55">Name</span>
+                  <span className="font-mono text-xs font-semibold uppercase tracking-[0.16em] text-foreground">Name</span>
                   <input
                     required
                     name="name"
-                    className="w-full border-b border-foreground/25 bg-transparent px-0 py-3 outline-none transition-colors placeholder:text-foreground/35 focus:border-primary"
+                    className="w-full border-b border-foreground/25 bg-transparent px-0 py-3 outline-none transition-colors placeholder:text-foreground/40 focus:border-primary"
                     placeholder="Your name"
                     disabled={submitting}
                   />
                 </label>
                 <label className="space-y-2">
-                  <span className="font-mono text-[10px] uppercase tracking-[0.16em] text-foreground/55">Phone</span>
+                  <span className="font-mono text-xs font-semibold uppercase tracking-[0.16em] text-foreground">Phone</span>
                   <input
                     required
                     name="phone"
                     type="tel"
-                    className="w-full border-b border-foreground/25 bg-transparent px-0 py-3 outline-none transition-colors placeholder:text-foreground/35 focus:border-primary"
+                    className="w-full border-b border-foreground/25 bg-transparent px-0 py-3 outline-none transition-colors placeholder:text-foreground/40 focus:border-primary"
                     placeholder="+91 ..."
                     disabled={submitting}
                   />
@@ -133,18 +133,18 @@ function ContactPage() {
 
               <div className="grid gap-5 sm:grid-cols-2">
                 <label className="space-y-2">
-                  <span className="font-mono text-[10px] uppercase tracking-[0.16em] text-foreground/55">Email</span>
+                  <span className="font-mono text-xs font-semibold uppercase tracking-[0.16em] text-foreground">Email</span>
                   <input
                     required
                     name="email"
                     type="email"
-                    className="w-full border-b border-foreground/25 bg-transparent px-0 py-3 outline-none transition-colors placeholder:text-foreground/35 focus:border-primary"
+                    className="w-full border-b border-foreground/25 bg-transparent px-0 py-3 outline-none transition-colors placeholder:text-foreground/40 focus:border-primary"
                     placeholder="you@example.com"
                     disabled={submitting}
                   />
                 </label>
                 <label className="space-y-2">
-                  <span className="font-mono text-[10px] uppercase tracking-[0.16em] text-foreground/55">Service</span>
+                  <span className="font-mono text-xs font-semibold uppercase tracking-[0.16em] text-foreground">Service</span>
                   <select
                     required
                     name="service"
@@ -162,7 +162,7 @@ function ContactPage() {
 
               <div className="grid gap-5 sm:grid-cols-2">
                 <label className="space-y-2">
-                  <span className="font-mono text-[10px] uppercase tracking-[0.16em] text-foreground/55">Event date</span>
+                  <span className="font-mono text-xs font-semibold uppercase tracking-[0.16em] text-foreground">Event date</span>
                   <input
                     required
                     name="date"
@@ -172,11 +172,11 @@ function ContactPage() {
                   />
                 </label>
                 <label className="space-y-2">
-                  <span className="font-mono text-[10px] uppercase tracking-[0.16em] text-foreground/55">Location</span>
+                  <span className="font-mono text-xs font-semibold uppercase tracking-[0.16em] text-foreground">Location</span>
                   <input
                     required
                     name="location"
-                    className="w-full border-b border-foreground/25 bg-transparent px-0 py-3 outline-none transition-colors placeholder:text-foreground/35 focus:border-primary"
+                    className="w-full border-b border-foreground/25 bg-transparent px-0 py-3 outline-none transition-colors placeholder:text-foreground/40 focus:border-primary"
                     placeholder="City or venue"
                     disabled={submitting}
                   />
@@ -184,12 +184,12 @@ function ContactPage() {
               </div>
 
               <label className="block space-y-2">
-                <span className="font-mono text-[10px] uppercase tracking-[0.16em] text-foreground/55">Message</span>
+                <span className="font-mono text-xs font-semibold uppercase tracking-[0.16em] text-foreground">Message</span>
                 <textarea
                   required
                   name="message"
                   rows={5}
-                  className="w-full resize-y border-b border-foreground/25 bg-transparent px-0 py-3 outline-none transition-colors placeholder:text-foreground/35 focus:border-primary"
+                  className="w-full resize-y border-b border-foreground/25 bg-transparent px-0 py-3 outline-none transition-colors placeholder:text-foreground/40 focus:border-primary"
                   placeholder="Tell us a little about what you are planning..."
                   disabled={submitting}
                 />
