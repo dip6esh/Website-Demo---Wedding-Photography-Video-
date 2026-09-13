@@ -6,10 +6,10 @@ import serviceWedding from "@/assets/service-wedding.jpg";
 import serviceProduct from "@/assets/service-product.jpg";
 
 export const contactDetails = {
-  whatsapp: "+91 98765 43210",
-  whatsappHref: "https://wa.me/919876543210",
-  phone: "+91 98765 43210",
-  phoneHref: "tel:+919876543210",
+  whatsapp: "+91 90820 13581",
+  whatsappHref: "https://wa.me/919082013581",
+  phone: "+91 90820 13581",
+  phoneHref: "tel:+919082013581",
   email: "hello@vessel.studio",
   emailHref: "mailto:hello@vessel.studio",
 };
