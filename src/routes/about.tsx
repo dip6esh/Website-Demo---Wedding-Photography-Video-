@@ -18,7 +18,7 @@ function AboutPage() {
     <main>
       <section className="border-b border-foreground/15">
         <div className="mx-auto grid max-w-6xl gap-10 px-5 py-14 md:grid-cols-12 md:items-end md:py-20">
-          <div className="md:col-span-7"><p className="mb-5 font-mono text-[11px] uppercase tracking-[0.22em] text-primary">About the studio · 01</p><h1 className="max-w-[14ch] font-display text-5xl font-bold leading-[0.98] md:text-7xl">A small team for the big, unrepeatable things.</h1></div>
+          <div className="md:col-span-7"><p className="mb-5 font-mono text-[11px] uppercase tracking-[0.22em] text-primary">About the studio</p><h1 className="max-w-[14ch] font-display text-5xl font-bold leading-[0.98] md:text-7xl">A small team for the big, unrepeatable things.</h1></div>
           <p className="max-w-[38ch] text-base leading-relaxed text-foreground/70 md:col-span-5 md:pb-1">We photograph with the patience of a long take and edit with the care of a printed album. The result is honest, tactile, and completely yours.</p>
         </div>
         <img src={heroImage} alt="Bride in a flowing dress at golden hour" width={1024} height={1280} className="mx-auto block aspect-[16/8] w-full max-w-6xl object-cover object-center px-5 pb-5 md:aspect-[16/7] md:px-5 md:pb-8" />

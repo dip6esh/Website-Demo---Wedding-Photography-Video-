@@ -74,7 +74,7 @@ function ContactPage() {
     <main>
       <section className="border-b border-foreground/15">
         <div className="mx-auto max-w-6xl px-5 py-14 md:py-20">
-          <p className="mb-5 font-mono text-[11px] uppercase tracking-[0.22em] text-primary">Contact · 04</p>
+          <p className="mb-5 font-mono text-[11px] uppercase tracking-[0.22em] text-primary">Contact</p>
           <h1 className="max-w-[13ch] font-display text-5xl font-bold leading-[0.98] md:text-7xl">Tell us the date. We&apos;ll handle the light.</h1>
           <p className="mt-7 max-w-[43ch] text-base leading-relaxed text-foreground/70">Share a few details and we&apos;ll get back to you within two working days with availability and next steps.</p>
         </div>

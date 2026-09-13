@@ -93,7 +93,7 @@ function WorksPage() {
       <section className="border-b border-foreground/15">
         <div className="mx-auto max-w-6xl px-5 py-14 md:py-20">
           <p className="mb-5 font-mono text-[11px] uppercase tracking-[0.22em] text-primary">
-            Our works · 03
+            Our works
           </p>
           <h1 className="max-w-[13ch] font-display text-5xl font-bold leading-[0.98] md:text-7xl">
             A living archive of the day.
