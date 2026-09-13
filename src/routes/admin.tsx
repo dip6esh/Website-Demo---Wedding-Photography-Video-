@@ -840,7 +840,6 @@ function AlbumCard(props: {
   const [photos, setPhotos] = useState<PhotoRow[]>([]);
   const [photosLoading, setPhotosLoading] = useState(false);
   const [photosDirty, setPhotosDirty] = useState(false);
-  const [newPhotoUrl, setNewPhotoUrl] = useState("");
   const [addingPhoto, setAddingPhoto] = useState(false);
   const photoFileRef = useRef<HTMLInputElement | null>(null);
   const editingPhotoIdRef = useRef<string | null>(null);
@@ -1015,27 +1014,6 @@ function AlbumCard(props: {
       props.onBanner("err", "Network error saving photo order.");
     } finally {
       setRowBusy(false);
-    }
-  }
-
-  async function addPhotoByUrl(url: string) {
-    if (!url.trim()) return;
-    setAddingPhoto(true);
-    try {
-      const r = await addAlbumPhoto({
-        data: { album_id: album.id, image_url: url.trim() },
-      });
-      if (r.ok) {
-        setNewPhotoUrl("");
-        props.onBanner("ok", "Photo added.");
-        await reloadPhotos(true);
-      } else {
-        props.onBanner("err", r.message ?? "Failed to add photo.");
-      }
-    } catch {
-      props.onBanner("err", "Network error adding photo.");
-    } finally {
-      setAddingPhoto(false);
     }
   }
 
@@ -1312,77 +1290,54 @@ function AlbumCard(props: {
 
           {/* Add photo bar */}
           <div className="rounded-xl bg-card ring-1 ring-foreground/10 p-4">
-            <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
+            <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
                 <h4 className="font-display text-sm font-semibold">Add photos to this album</h4>
                 <p className="text-xs text-foreground/55 mt-0.5">
-                  Paste a public URL or upload images directly (JPG, PNG, WebP, GIF, AVIF · max 10MB each).
+                  Upload images directly (JPG, PNG, WebP, GIF, AVIF · max 10MB each).
                 </p>
               </div>
-              {photosDirty ? (
+              <div className="flex flex-wrap items-center gap-2">
+                {photosDirty ? (
+                  <button
+                    type="button"
+                    onClick={savePhotoOrder}
+                    disabled={rowBusy}
+                    className="inline-flex items-center gap-2 rounded-full bg-primary px-3.5 py-1.5 text-xs font-medium text-primary-foreground ring-1 ring-primary/30 disabled:opacity-60"
+                  >
+                    <Save size={12} /> Save photo order
+                  </button>
+                ) : null}
+                <input
+                  ref={photoFileRef}
+                  type="file"
+                  multiple
+                  accept="image/jpeg,image/png,image/webp,image/gif,image/avif"
+                  hidden
+                  onChange={async (e) => {
+                    const files = Array.from(e.target.files ?? []);
+                    if (files.length === 0) return;
+                    setAddingPhoto(true);
+                    const queue: { name: string; pct: number; done: boolean; error?: string }[] =
+                      files.map((f) => ({ name: f.name, pct: 0, done: false }));
+                    setUploadQueue(queue);
+                    await Promise.all(files.map((f, i) => uploadPhoto(f, i)));
+                    setAddingPhoto(false);
+                    // Clear queue after a brief moment so user sees 100%
+                    setTimeout(() => setUploadQueue([]), 1800);
+                    if (photoFileRef.current) photoFileRef.current.value = "";
+                  }}
+                />
                 <button
                   type="button"
-                  onClick={savePhotoOrder}
-                  disabled={rowBusy}
-                  className="inline-flex items-center gap-2 rounded-full bg-primary px-3.5 py-1.5 text-xs font-medium text-primary-foreground ring-1 ring-primary/30 disabled:opacity-60"
+                  onClick={() => photoFileRef.current?.click()}
+                  disabled={addingPhoto}
+                  className="inline-flex items-center gap-1.5 rounded-full bg-foreground px-4 py-2 text-xs font-medium text-background hover:bg-foreground/90 transition-colors disabled:opacity-60"
                 >
-                  <Save size={12} /> Save photo order
+                  {addingPhoto ? <Loader2 size={12} className="animate-spin" /> : <ImagePlus size={12} />}
+                  {addingPhoto ? "Uploading..." : "Upload images"}
                 </button>
-              ) : null}
-            </div>
-            <div className="flex flex-wrap items-center gap-2">
-              <input
-                type="text"
-                placeholder="Paste image URL and press Add…"
-                value={newPhotoUrl}
-                onChange={(e) => setNewPhotoUrl(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" && newPhotoUrl.trim()) {
-                    e.preventDefault();
-                    void addPhotoByUrl(newPhotoUrl);
-                  }
-                }}
-                disabled={addingPhoto}
-                className="flex-1 min-w-[240px] rounded-lg border border-foreground/15 bg-background px-3 py-2 text-sm outline-none focus:border-primary disabled:opacity-60"
-              />
-              <button
-                type="button"
-                onClick={() => void addPhotoByUrl(newPhotoUrl)}
-                disabled={addingPhoto || !newPhotoUrl.trim()}
-                className="inline-flex items-center gap-1.5 rounded-full bg-card px-3.5 py-2 text-xs font-medium ring-1 ring-foreground/15 hover:bg-background disabled:opacity-60"
-              >
-                {addingPhoto ? <Loader2 size={12} className="animate-spin" /> : <Plus size={12} />}
-                Add URL
-              </button>
-              <input
-                ref={photoFileRef}
-                type="file"
-                multiple
-                accept="image/jpeg,image/png,image/webp,image/gif,image/avif"
-                hidden
-                onChange={async (e) => {
-                  const files = Array.from(e.target.files ?? []);
-                  if (files.length === 0) return;
-                  setAddingPhoto(true);
-                  const queue: { name: string; pct: number; done: boolean; error?: string }[] =
-                    files.map((f) => ({ name: f.name, pct: 0, done: false }));
-                  setUploadQueue(queue);
-                  await Promise.all(files.map((f, i) => uploadPhoto(f, i)));
-                  setAddingPhoto(false);
-                  // Clear queue after a brief moment so user sees 100%
-                  setTimeout(() => setUploadQueue([]), 1800);
-                  if (photoFileRef.current) photoFileRef.current.value = "";
-                }}
-              />
-              <button
-                type="button"
-                onClick={() => photoFileRef.current?.click()}
-                disabled={addingPhoto}
-                className="inline-flex items-center gap-1.5 rounded-full bg-foreground px-3.5 py-2 text-xs font-medium text-background disabled:opacity-60"
-              >
-                {addingPhoto ? <Loader2 size={12} className="animate-spin" /> : <ImagePlus size={12} />}
-                {addingPhoto ? "Uploading..." : "Upload images"}
-              </button>
+              </div>
             </div>
 
             {/* Upload progress bar */}

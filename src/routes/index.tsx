@@ -146,7 +146,7 @@ function HomePage() {
           <div className="mb-10 flex flex-col justify-between gap-4 sm:flex-row sm:items-end">
             <div>
               <p className="mb-3 font-mono text-[11px] uppercase tracking-[0.2em] text-foreground/45">What we do</p>
-              <h2 className="font-display text-2xl font-semibold md:text-4xl">Six ways to work with us</h2>
+              <h2 className="font-display text-2xl font-semibold md:text-4xl">Our Services</h2>
             </div>
             <Link
               to="/services"
